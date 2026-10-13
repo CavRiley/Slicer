@@ -3,7 +3,6 @@ import glob
 import json
 import logging
 import os
-import re
 import tempfile
 
 import ctk
@@ -34,19 +33,16 @@ class DataReview(ScriptedLoadableModule):
         self.parent.dependencies = []
         self.parent.contributors = ["Cavan Riley"]
         self.parent.helpText = _("""
-<p>Step through a dataset of images and their segmentations (for example stroke lesion masks),
-and accept, reject, or comment on each case.</p>
+<p>Step through a dataset of diffusion images (ADC and trace-weighted) with their stroke lesion
+segmentations, and accept or reject each case with a comment.</p>
 
 <p>The list of cases and the review state (status, comment, reviewer, timestamp) live in a single
-JSON <i>manifest</i> file that is saved automatically after every change. A manifest can be created by
-scanning a dataset folder with an image and a segmentation glob pattern; files are paired by base name.</p>
-
-<p>Images are assumed to share the same physical space, so slice positions are kept between cases
-by default.</p>
+JSON <i>manifest</i> file that is saved automatically after every change. The ADC and TRACEW images are
+shown side by side in linked (locked) axial views with the segmentation overlaid on both.</p>
 
 <p>Keyboard shortcuts (active while this module is open): <b>A</b> accept, <b>R</b> reject,
 <b>N</b>/<b>Right</b> next, <b>P</b>/<b>Left</b> previous, <b>U</b> next unreviewed,
-<b>S</b> toggle segmentation visibility.</p>
+<b>S</b> toggle segmentation visibility, <b>Ctrl+Shift+U</b> toggle the simplified interface.</p>
 """)
         self.parent.acknowledgementText = _("""
 Developed for reviewing imaging datasets and their stroke lesion segmentations.
@@ -54,7 +50,7 @@ Developed for reviewing imaging datasets and their stroke lesion segmentations.
 
 
 #
-# Review status constants
+# Constants
 #
 
 STATUS_PENDING = "pending"
@@ -63,23 +59,61 @@ STATUS_REJECTED = "rejected"
 ALL_STATUSES = (STATUS_PENDING, STATUS_ACCEPTED, STATUS_REJECTED)
 
 MANIFEST_FORMAT = "SlicerDataReview"
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 
-# Suffixes commonly appended to segmentation file names; stripped before pairing with images.
-SEGMENTATION_SUFFIXES = ("_seg", "-seg", "_segmentation", "_label", "_labels", "_mask", "_lesion", "_gt")
+DEFAULT_CHANNELS = ["ADC", "TRACEW"]
+
+# Layout id for the custom side-by-side axial layout (must not collide with built-in layouts).
+SIDE_BY_SIDE_LAYOUT_ID = 1503
+SIDE_BY_SIDE_VIEWS = ["Red", "Yellow"]
+
+# Suffixes appended to file names that identify a channel or a segmentation; stripped before pairing.
+PAIRING_SUFFIXES = ("_adc", "-adc", "_tracew", "-tracew", "_trace", "-trace", "_dwi", "-dwi", "_b1000", "-b1000",
+                    "_seg", "-seg", "_segmentation", "_label", "_labels", "_mask", "_lesion", "_gt", "_image", "_img")
+# File stems that carry no case information at all (e.g. sub-001/adc.nii.gz); the folder name is used instead.
+GENERIC_STEMS = {"adc", "tracew", "trace", "dwi", "b1000", "seg", "segmentation", "label", "labels", "mask",
+                 "lesion", "gt", "image", "img", ""}
+
+SETTINGS_PREFIX = "DataReview/"
+SETTING_AUTOLOAD = SETTINGS_PREFIX + "autoLoadManifest"
+SETTING_SIMPLIFIED_UI = SETTINGS_PREFIX + "simplifiedUI"
+SETTING_REVIEWER = SETTINGS_PREFIX + "reviewer"
 
 
 def _stripImageExtensions(filename):
     """Return the base name of an image file without its (possibly double) extension."""
     name = os.path.basename(filename)
-    for ext in (".nii.gz", ".nrrd", ".nhdr", ".nii", ".mha", ".mhd", ".seg.nrrd", ".img.gz", ".img", ".hdr"):
+    for ext in (".seg.nrrd", ".nii.gz", ".img.gz", ".nrrd", ".nhdr", ".nii", ".mha", ".mhd", ".img", ".hdr"):
         if name.lower().endswith(ext):
             return name[: -len(ext)]
     return os.path.splitext(name)[0]
 
 
+def _caseKey(path, rootDirectory):
+    """Derive the case id that a file belongs to from its name (or its folder for generic names)."""
+    stem = _stripImageExtensions(path)
+    low = stem.lower()
+    for suffix in PAIRING_SUFFIXES:
+        if low.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            low = stem.lower()
+            break
+    if low in GENERIC_STEMS:
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent != rootDirectory:
+            return os.path.basename(parent)
+    return stem
+
+
 def _utcTimestamp():
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _settingBool(key, default=False):
+    value = qt.QSettings().value(key, default)
+    if isinstance(value, str):
+        return value.lower() in ("1", "true", "yes")
+    return bool(value)
 
 
 #
@@ -94,13 +128,14 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
 
         {
           "format": "SlicerDataReview",
-          "version": 1,
-          "root": "/path/to/dataset",            # base for relative case paths (optional)
+          "version": 2,
+          "root": ".",                              # base for relative case paths (relative to the manifest)
+          "channels": ["ADC", "TRACEW"],            # image channels, in display order
           "cases": [
             {
               "id": "sub-001",
-              "image": "images/sub-001.nii.gz",     # absolute, or relative to root
-              "segmentation": "labels/sub-001.nii.gz",  # may be null
+              "images": {"ADC": "adc/sub-001.nii.gz", "TRACEW": "tracew/sub-001.nii.gz"},
+              "segmentation": "labels/sub-001.nii.gz",   # may be null
               "status": "pending" | "accepted" | "rejected",
               "comment": "",
               "reviewer": "",
@@ -108,6 +143,8 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
             }
           ]
         }
+
+    Version 1 manifests with a single ``"image"`` entry per case are upgraded on load.
     """
 
     def __init__(self):
@@ -115,64 +152,69 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
         self.manifestPath = None
         self.manifest = None
         self.currentIndex = -1
-        self.imageNode = None
+        self.imageNodes = {}  # channel -> volume node
         self.segmentationNode = None
 
     # ---- Manifest creation / IO ----------------------------------------------------------------
 
     @staticmethod
-    def emptyManifest(root=None):
-        return {"format": MANIFEST_FORMAT, "version": MANIFEST_VERSION, "root": root, "cases": []}
+    def emptyManifest(root=None, channels=None):
+        return {"format": MANIFEST_FORMAT, "version": MANIFEST_VERSION, "root": root,
+                "channels": list(channels or DEFAULT_CHANNELS), "cases": []}
 
     @staticmethod
-    def scanDirectory(rootDirectory, imagePattern, segmentationPattern=None):
-        """Build a manifest by matching image and segmentation files by base name.
+    def scanDirectory(rootDirectory, imagePatterns, segmentationPattern=None):
+        """Build a manifest by matching image channels and segmentations by case key.
 
         :param rootDirectory: dataset folder; patterns are evaluated relative to it.
-        :param imagePattern: glob pattern for the images, e.g. ``images/*.nii.gz`` or ``**/t1.nii.gz``.
+        :param imagePatterns: dict channel name -> glob pattern (e.g. ``{"ADC": "adc/*.nii.gz"}``),
+            or a single pattern string for a one-channel dataset.
         :param segmentationPattern: glob pattern for the segmentations (optional).
         :return: manifest dictionary (not saved). Case paths are stored relative to ``rootDirectory``.
         """
         rootDirectory = os.path.abspath(rootDirectory)
         if not os.path.isdir(rootDirectory):
             raise ValueError(f"Dataset folder does not exist: {rootDirectory}")
+        if isinstance(imagePatterns, str):
+            imagePatterns = {"Image": imagePatterns}
+        imagePatterns = {ch: pat for ch, pat in imagePatterns.items() if pat}
+        if not imagePatterns:
+            raise ValueError("At least one image pattern is required")
 
-        imageFiles = sorted(glob.glob(os.path.join(rootDirectory, imagePattern), recursive=True))
-        imageFiles = [f for f in imageFiles if os.path.isfile(f)]
-        if not imageFiles:
-            raise ValueError(f"No images found for pattern '{imagePattern}' in {rootDirectory}")
+        def findFiles(pattern):
+            files = sorted(glob.glob(os.path.join(rootDirectory, pattern), recursive=True))
+            return [f for f in files if os.path.isfile(f)]
 
-        segmentationByKey = {}
-        if segmentationPattern:
-            for f in sorted(glob.glob(os.path.join(rootDirectory, segmentationPattern), recursive=True)):
-                if not os.path.isfile(f):
+        filesByKey = {}  # key -> {"images": {channel: file}, "segmentation": file}
+        for channel, pattern in imagePatterns.items():
+            files = findFiles(pattern)
+            if not files:
+                raise ValueError(f"No {channel} images found for pattern '{pattern}' in {rootDirectory}")
+            for f in files:
+                key = _caseKey(f, rootDirectory)
+                entry = filesByKey.setdefault(key, {"images": {}, "segmentation": None})
+                if channel in entry["images"]:
+                    logging.warning(f"DataReview: several {channel} files map to case '{key}', keeping {entry['images'][channel]}")
                     continue
-                key = _stripImageExtensions(f)
-                for suffix in SEGMENTATION_SUFFIXES:
-                    if key.lower().endswith(suffix):
-                        key = key[: -len(suffix)]
-                        break
-                segmentationByKey.setdefault(key, f)
-                # Also index by parent folder name, for layouts like case001/image.nii.gz + case001/seg.nii.gz
-                segmentationByKey.setdefault("dir:" + os.path.basename(os.path.dirname(f)), f)
+                entry["images"][channel] = f
+        if segmentationPattern:
+            for f in findFiles(segmentationPattern):
+                key = _caseKey(f, rootDirectory)
+                entry = filesByKey.get(key)
+                if entry is None:
+                    logging.warning(f"DataReview: segmentation {f} does not match any image, skipped")
+                    continue
+                if entry["segmentation"] is None:
+                    entry["segmentation"] = f
 
-        manifest = DataReviewLogic.emptyManifest(rootDirectory)
-        usedIds = set()
-        for imageFile in imageFiles:
-            stem = _stripImageExtensions(imageFile)
-            parentName = os.path.basename(os.path.dirname(imageFile))
-            segmentationFile = segmentationByKey.get(stem)
-            caseId = stem
-            if segmentationFile is None and parentName and os.path.dirname(imageFile) != rootDirectory:
-                segmentationFile = segmentationByKey.get("dir:" + parentName)
-                caseId = parentName
-            if caseId in usedIds:
-                caseId = os.path.relpath(imageFile, rootDirectory)
-            usedIds.add(caseId)
+        manifest = DataReviewLogic.emptyManifest(rootDirectory, list(imagePatterns.keys()))
+        for key in sorted(filesByKey):
+            entry = filesByKey[key]
             manifest["cases"].append({
-                "id": caseId,
-                "image": os.path.relpath(imageFile, rootDirectory),
-                "segmentation": os.path.relpath(segmentationFile, rootDirectory) if segmentationFile else None,
+                "id": key,
+                "images": {ch: (os.path.relpath(entry["images"][ch], rootDirectory) if ch in entry["images"] else None)
+                           for ch in imagePatterns},
+                "segmentation": os.path.relpath(entry["segmentation"], rootDirectory) if entry["segmentation"] else None,
                 "status": STATUS_PENDING,
                 "comment": "",
                 "reviewer": "",
@@ -226,9 +268,20 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
 
     @staticmethod
     def validate(manifest):
-        for case in manifest["cases"]:
-            if "id" not in case or "image" not in case:
-                raise ValueError("Each case needs at least an 'id' and an 'image' entry")
+        """Check the manifest and fill in defaults (also upgrades version 1 manifests in place)."""
+        cases = manifest.get("cases")
+        if not isinstance(cases, list):
+            raise ValueError("Manifest has no 'cases' list")
+        for case in cases:
+            if "id" not in case:
+                raise ValueError("Each case needs an 'id' entry")
+            if "images" not in case:
+                if "image" in case:
+                    case["images"] = {"Image": case.pop("image")}
+                else:
+                    raise ValueError(f"Case '{case['id']}' has no 'images' entry")
+            if not isinstance(case["images"], dict) or not case["images"]:
+                raise ValueError(f"Case '{case['id']}' needs an 'images' dictionary (channel -> path)")
             case.setdefault("segmentation", None)
             case.setdefault("status", STATUS_PENDING)
             case.setdefault("comment", "")
@@ -236,6 +289,10 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
             case.setdefault("reviewed_at", None)
             if case["status"] not in ALL_STATUSES:
                 raise ValueError(f"Case '{case['id']}' has unknown status '{case['status']}'")
+        if not manifest.get("channels"):
+            manifest["channels"] = list(cases[0]["images"].keys()) if cases else list(DEFAULT_CHANNELS)
+        manifest["version"] = MANIFEST_VERSION
+        manifest.setdefault("format", MANIFEST_FORMAT)
 
     def save(self, manifestPath=None):
         """Write the manifest atomically (write to a temporary file, then replace)."""
@@ -261,6 +318,10 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
     @property
     def cases(self):
         return self.manifest["cases"] if self.manifest else []
+
+    @property
+    def channels(self):
+        return self.manifest.get("channels", []) if self.manifest else []
 
     def caseCount(self):
         return len(self.cases)
@@ -308,10 +369,13 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
     def setDecision(self, index, status, reviewer="", comment=None, save=True):
         if status not in ALL_STATUSES:
             raise ValueError(f"Unknown status '{status}'")
+        if comment is None:
+            comment = self.cases[index].get("comment", "")
+        if status == STATUS_REJECTED and not comment.strip():
+            raise ValueError("A comment describing the reason is required to reject a case")
         case = self.cases[index]
         case["status"] = status
-        if comment is not None:
-            case["comment"] = comment
+        case["comment"] = comment
         if status == STATUS_PENDING:
             case["reviewer"] = ""
             case["reviewed_at"] = None
@@ -330,35 +394,75 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
             self.save()
         return True
 
+    # ---- Layout ----------------------------------------------------------------------------------
+
+    @staticmethod
+    def sideBySideLayoutXml():
+        items = []
+        for viewName, color in zip(SIDE_BY_SIDE_VIEWS, ("#F34A33", "#EDD54C")):
+            items.append(f"""
+   <item>
+    <view class="vtkMRMLSliceNode" singletontag="{viewName}">
+     <property name="orientation" action="default">Axial</property>
+     <property name="viewlabel" action="default">{viewName[0]}</property>
+     <property name="viewcolor" action="default">{color}</property>
+    </view>
+   </item>""")
+        return '<layout type="horizontal" split="true">' + "".join(items) + "\n  </layout>"
+
+    @staticmethod
+    def applyLayout(numberOfChannels):
+        """Show one axial view for a single channel, or two linked axial views side by side."""
+        layoutManager = slicer.app.layoutManager()
+        if layoutManager is None:
+            return
+        layoutNode = layoutManager.layoutLogic().GetLayoutNode()
+        if numberOfChannels >= 2:
+            if not layoutNode.IsLayoutDescription(SIDE_BY_SIDE_LAYOUT_ID):
+                layoutNode.AddLayoutDescription(SIDE_BY_SIDE_LAYOUT_ID, DataReviewLogic.sideBySideLayoutXml())
+            layoutId = SIDE_BY_SIDE_LAYOUT_ID
+        else:
+            layoutId = slicer.vtkMRMLLayoutNode.SlicerLayoutOneUpRedSliceView
+        if layoutManager.layout != layoutId:
+            layoutManager.setLayout(layoutId)
+
     # ---- Scene handling --------------------------------------------------------------------------
 
     def unloadCurrentCase(self):
-        for node in (self.imageNode, self.segmentationNode):
+        for node in list(self.imageNodes.values()) + [self.segmentationNode]:
             if node is not None and slicer.mrmlScene.IsNodePresent(node):
                 slicer.mrmlScene.RemoveNode(node)
-        self.imageNode = None
+        self.imageNodes = {}
         self.segmentationNode = None
 
     def loadCase(self, index, fitToViews=False, showSegmentation=True, fillOpacity=0.5):
-        """Load the image and segmentation of a case into the scene, replacing the previous case.
+        """Load all image channels and the segmentation of a case, replacing the previous case.
 
-        Returns (imageNode, segmentationNode); segmentationNode may be None.
-        Raises on a missing image file; a missing segmentation file is logged as a warning.
+        Channels are shown one per view (first channel in the Red view, second in the Yellow view) in
+        linked axial views; the segmentation is overlaid on all views.
+
+        Returns (imageNodes dict, segmentationNode); segmentationNode may be None.
+        Raises if no image file of the case exists; missing single files are logged as warnings.
         """
         case = self.cases[index]
-        imagePath = self.resolvePath(case["image"])
-        if not imagePath or not os.path.isfile(imagePath):
-            raise FileNotFoundError(f"Image not found for case '{case['id']}': {imagePath}")
-
         self.unloadCurrentCase()
 
-        self.imageNode = slicer.util.loadVolume(imagePath, {"name": case["id"], "show": False})
+        channels = [ch for ch in self.channels if ch in case["images"]] or list(case["images"].keys())
+        for channel in channels:
+            imagePath = self.resolvePath(case["images"].get(channel))
+            if not imagePath or not os.path.isfile(imagePath):
+                logging.warning(f"DataReview: {channel} image not found for case '{case['id']}': {imagePath}")
+                continue
+            self.imageNodes[channel] = slicer.util.loadVolume(imagePath, {"name": f"{case['id']} {channel}", "show": False})
+        if not self.imageNodes:
+            raise FileNotFoundError(f"No image files found for case '{case['id']}'")
+        referenceNode = next(iter(self.imageNodes.values()))
 
         segmentationPath = self.resolvePath(case.get("segmentation"))
         if segmentationPath:
             if os.path.isfile(segmentationPath):
                 self.segmentationNode = slicer.util.loadSegmentation(segmentationPath, {"name": f"{case['id']} segmentation"})
-                self.segmentationNode.SetReferenceImageGeometryParameterFromVolumeNode(self.imageNode)
+                self.segmentationNode.SetReferenceImageGeometryParameterFromVolumeNode(referenceNode)
                 displayNode = self.segmentationNode.GetDisplayNode()
                 if displayNode:
                     displayNode.SetVisibility(showSegmentation)
@@ -366,17 +470,45 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
             else:
                 logging.warning(f"DataReview: segmentation not found for case '{case['id']}': {segmentationPath}")
 
-        slicer.util.setSliceViewerLayers(background=self.imageNode, foreground=None, label=None, fit=fitToViews)
+        self.showInViews(channels, fitToViews)
         self.currentIndex = index
-        return self.imageNode, self.segmentationNode
+        return self.imageNodes, self.segmentationNode
+
+    def showInViews(self, channels, fitToViews):
+        self.applyLayout(len(channels))
+        layoutManager = slicer.app.layoutManager()
+        if layoutManager is None:
+            return
+        viewNames = SIDE_BY_SIDE_VIEWS if len(channels) >= 2 else SIDE_BY_SIDE_VIEWS[:1]
+        for viewName, channel in zip(viewNames, channels):
+            sliceWidget = layoutManager.sliceWidget(viewName)
+            if sliceWidget is None:
+                continue
+            node = self.imageNodes.get(channel)
+            sliceNode = sliceWidget.mrmlSliceNode()
+            sliceNode.SetOrientationToAxial()
+            sliceNode.SetLayoutLabel(channel)
+            compositeNode = sliceWidget.mrmlSliceCompositeNode()
+            compositeNode.SetBackgroundVolumeID(node.GetID() if node else None)
+            compositeNode.SetForegroundVolumeID(None)
+            compositeNode.SetLabelVolumeID(None)
+            # "Lock" the views together: scrolling / zooming one view moves the other one as well.
+            compositeNode.SetLinkedControl(True)
+            compositeNode.SetHotLinkedControl(True)
+        if fitToViews:
+            for viewName in viewNames:
+                sliceWidget = layoutManager.sliceWidget(viewName)
+                if sliceWidget is not None:
+                    sliceWidget.sliceLogic().FitSliceToAll()
 
     def setSegmentationVisible(self, visible):
         if self.segmentationNode and self.segmentationNode.GetDisplayNode():
             self.segmentationNode.GetDisplayNode().SetVisibility(visible)
 
-    def setSegmentationFillOpacity(self, opacity):
+    def segmentationVisible(self):
         if self.segmentationNode and self.segmentationNode.GetDisplayNode():
-            self.segmentationNode.GetDisplayNode().SetOpacity2DFill(opacity)
+            return bool(self.segmentationNode.GetDisplayNode().GetVisibility())
+        return True
 
 
 #
@@ -386,12 +518,19 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
 
 class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
     """Uses ScriptedLoadableModuleWidget base class, available at:
-    https://github.com/Slicer/Slicer/blob/main/Base/Python/scripts/slicer/ScriptedLoadableModule.py
+    https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
     """
 
-    SETTINGS_PREFIX = "DataReview/"
-
     STATUS_PREFIX = {STATUS_PENDING: "• ", STATUS_ACCEPTED: "✓ ", STATUS_REJECTED: "✗ "}
+
+    ACCEPT_STYLE = ("QPushButton { background-color: #2e8b57; color: white; font-weight: bold; font-size: 16px; "
+                    "padding: 10px; border: 1px solid #1f6b40; border-radius: 5px; }"
+                    "QPushButton:hover { background-color: #37a267; } QPushButton:pressed { background-color: #24703f; }"
+                    "QPushButton:disabled { background-color: #a9c9b5; color: #eeeeee; border-color: #a9c9b5; }")
+    REJECT_STYLE = ("QPushButton { background-color: #c83c3c; color: white; font-weight: bold; font-size: 16px; "
+                    "padding: 10px; border: 1px solid #962a2a; border-radius: 5px; }"
+                    "QPushButton:hover { background-color: #d94a4a; } QPushButton:pressed { background-color: #a32f2f; }"
+                    "QPushButton:disabled { background-color: #dca5a5; color: #eeeeee; border-color: #dca5a5; }")
 
     def __init__(self, parent=None):
         ScriptedLoadableModuleWidget.__init__(self, parent)
@@ -400,6 +539,8 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.shortcuts = []
         self._updatingGUI = False
         self._viewsFittedOnce = False
+        self._autoLoadAttempted = False
+        self._simplifiedUIActive = False
 
     def setup(self):
         ScriptedLoadableModuleWidget.setup(self)
@@ -414,28 +555,41 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         pathLineEdit = ctk.ctkPathLineEdit
         self.ui.manifestPathLineEdit.filters = pathLineEdit.Files
         self.ui.manifestPathLineEdit.nameFilters = ["Review manifest (*.json)"]
-        self.ui.manifestPathLineEdit.settingKey = self.SETTINGS_PREFIX + "manifestPath"
+        self.ui.manifestPathLineEdit.settingKey = SETTINGS_PREFIX + "manifestPath"
         self.ui.rootDirectoryLineEdit.filters = pathLineEdit.Dirs
-        self.ui.rootDirectoryLineEdit.settingKey = self.SETTINGS_PREFIX + "rootDirectory"
+        self.ui.rootDirectoryLineEdit.settingKey = SETTINGS_PREFIX + "rootDirectory"
+
+        self.ui.acceptButton.setStyleSheet(self.ACCEPT_STYLE)
+        self.ui.rejectButton.setStyleSheet(self.REJECT_STYLE)
+        self.ui.rejectReasonLabel.setStyleSheet("QLabel { color: #c83c3c; font-weight: bold; }")
+        self.ui.rejectReasonLabel.hide()
 
         settings = qt.QSettings()
-        self.ui.reviewerLineEdit.text = settings.value(self.SETTINGS_PREFIX + "reviewer", "")
-        self.ui.imagePatternLineEdit.text = settings.value(self.SETTINGS_PREFIX + "imagePattern", self.ui.imagePatternLineEdit.text)
-        self.ui.segmentationPatternLineEdit.text = settings.value(self.SETTINGS_PREFIX + "segmentationPattern", self.ui.segmentationPatternLineEdit.text)
+        self.ui.reviewerLineEdit.text = settings.value(SETTING_REVIEWER, "")
+        self.ui.adcPatternLineEdit.text = settings.value(SETTINGS_PREFIX + "adcPattern", self.ui.adcPatternLineEdit.text)
+        self.ui.tracewPatternLineEdit.text = settings.value(SETTINGS_PREFIX + "tracewPattern", self.ui.tracewPatternLineEdit.text)
+        self.ui.segmentationPatternLineEdit.text = settings.value(SETTINGS_PREFIX + "segmentationPattern", self.ui.segmentationPatternLineEdit.text)
+        autoLoadPath = settings.value(SETTING_AUTOLOAD, "")
+        self.ui.autoLoadCheckBox.checked = bool(autoLoadPath)
+        if autoLoadPath and not self.ui.manifestPathLineEdit.currentPath:
+            self.ui.manifestPathLineEdit.currentPath = autoLoadPath
+        self.ui.simplifiedUICheckBox.checked = _settingBool(SETTING_SIMPLIFIED_UI)
 
         # Connections
         self.ui.loadManifestButton.connect("clicked(bool)", self.onLoadManifest)
         self.ui.scanButton.connect("clicked(bool)", self.onScanDirectory)
         self.ui.reviewerLineEdit.connect("editingFinished()", self.onReviewerChanged)
+        self.ui.autoLoadCheckBox.connect("toggled(bool)", self.onAutoLoadToggled)
+        self.ui.simplifiedUICheckBox.connect("toggled(bool)", self.onSimplifiedUIToggled)
         self.ui.caseListWidget.connect("currentRowChanged(int)", self.onCaseListRowChanged)
         self.ui.previousButton.connect("clicked(bool)", self.onPrevious)
         self.ui.nextButton.connect("clicked(bool)", self.onNext)
         self.ui.nextPendingButton.connect("clicked(bool)", self.onNextPending)
         self.ui.acceptButton.connect("clicked(bool)", lambda: self.onDecision(STATUS_ACCEPTED))
         self.ui.rejectButton.connect("clicked(bool)", lambda: self.onDecision(STATUS_REJECTED))
-        self.ui.clearDecisionButton.connect("clicked(bool)", lambda: self.onDecision(STATUS_PENDING))
+        self.ui.removeDecisionButton.connect("clicked(bool)", lambda: self.onDecision(STATUS_PENDING))
+        self.ui.commentTextEdit.connect("textChanged()", self.onCommentTextChanged)
         self.ui.showSegmentationCheckBox.connect("toggled(bool)", self.logic.setSegmentationVisible)
-        self.ui.opacitySliderWidget.connect("valueChanged(double)", self.logic.setSegmentationFillOpacity)
         self.ui.resetViewsButton.connect("clicked(bool)", self.onResetViews)
 
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
@@ -448,6 +602,18 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
     def enter(self):
         self.installShortcuts()
+        if not self._autoLoadAttempted:
+            self._autoLoadAttempted = True
+            if _settingBool(SETTING_SIMPLIFIED_UI):
+                self.setSimplifiedUI(True)
+            autoLoadPath = qt.QSettings().value(SETTING_AUTOLOAD, "")
+            if autoLoadPath and self.logic.manifest is None:
+                if os.path.isfile(autoLoadPath):
+                    self.ui.manifestPathLineEdit.currentPath = autoLoadPath
+                    # Defer until the main window is fully shown so the views are ready.
+                    qt.QTimer.singleShot(0, self.onLoadManifest)
+                else:
+                    logging.warning(f"DataReview: manifest configured for automatic loading does not exist: {autoLoadPath}")
 
     def exit(self):
         self.commitComment()
@@ -455,11 +621,46 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
     def onSceneStartClose(self, caller, event):
         self.commitComment()
-        self.logic.imageNode = None
+        self.logic.imageNodes = {}
         self.logic.segmentationNode = None
         self.logic.currentIndex = -1
         self._viewsFittedOnce = False
         self.updateGUI()
+
+    # ---- Simplified ("kiosk") interface --------------------------------------------------------
+
+    def setSimplifiedUI(self, simplified):
+        """Hide everything a reviewer does not need: menus, toolbars, logo, help, status bar, Data Probe."""
+        if slicer.util.mainWindow() is None:
+            return
+        visible = not simplified
+        slicer.util.setToolbarsVisible(visible)
+        slicer.util.setMenuBarsVisible(visible)
+        slicer.util.setApplicationLogoVisible(visible)
+        slicer.util.setModuleHelpSectionVisible(visible)
+        slicer.util.setModulePanelTitleVisible(visible)
+        slicer.util.setDataProbeVisible(visible)
+        slicer.util.setStatusBarVisible(visible)
+        if simplified:
+            slicer.util.setPythonConsoleVisible(False)
+            self.ui.datasetCollapsibleButton.collapsed = True
+        self._simplifiedUIActive = simplified
+
+    def toggleSimplifiedUI(self):
+        self.setSimplifiedUI(not self._simplifiedUIActive)
+
+    def onSimplifiedUIToggled(self, checked):
+        qt.QSettings().setValue(SETTING_SIMPLIFIED_UI, checked)
+
+    def onAutoLoadToggled(self, checked):
+        path = self.ui.manifestPathLineEdit.currentPath if checked else ""
+        if checked and not path:
+            self._updatingGUI = True
+            self.ui.autoLoadCheckBox.checked = False
+            self._updatingGUI = False
+            slicer.util.errorDisplay(_("Select or create a manifest first."))
+            return
+        qt.QSettings().setValue(SETTING_AUTOLOAD, path)
 
     # ---- Keyboard shortcuts ----------------------------------------------------------------------
 
@@ -484,6 +685,11 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             shortcut.setKey(qt.QKeySequence(key))
             shortcut.connect("activated()", self._guardedShortcut(callback))
             self.shortcuts.append(shortcut)
+        # Escape hatch from the simplified interface for the person who sets the machine up.
+        shortcut = qt.QShortcut(mainWindow)
+        shortcut.setKey(qt.QKeySequence("Ctrl+Shift+U"))
+        shortcut.connect("activated()", self.toggleSimplifiedUI)
+        self.shortcuts.append(shortcut)
 
     def _guardedShortcut(self, callback):
         """Ignore shortcuts while the user is typing in a text field."""
@@ -513,23 +719,29 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             slicer.util.errorDisplay(_("Failed to load manifest: {error}").format(error=str(e)))
             return
         self.ui.manifestPathLineEdit.addCurrentPathToHistory()
+        if self.ui.autoLoadCheckBox.checked:
+            qt.QSettings().setValue(SETTING_AUTOLOAD, self.logic.manifestPath)
         self.afterManifestLoaded()
 
     def onScanDirectory(self):
         rootDirectory = self.ui.rootDirectoryLineEdit.currentPath
-        imagePattern = self.ui.imagePatternLineEdit.text.strip()
+        patterns = {
+            "ADC": self.ui.adcPatternLineEdit.text.strip(),
+            "TRACEW": self.ui.tracewPatternLineEdit.text.strip(),
+        }
         segmentationPattern = self.ui.segmentationPatternLineEdit.text.strip() or None
-        if not rootDirectory or not imagePattern:
-            slicer.util.errorDisplay(_("Select a dataset folder and an image pattern first."))
+        if not rootDirectory or not any(patterns.values()):
+            slicer.util.errorDisplay(_("Select a dataset folder and at least one image pattern first."))
             return
 
         settings = qt.QSettings()
-        settings.setValue(self.SETTINGS_PREFIX + "imagePattern", imagePattern)
-        settings.setValue(self.SETTINGS_PREFIX + "segmentationPattern", segmentationPattern or "")
+        settings.setValue(SETTINGS_PREFIX + "adcPattern", patterns["ADC"])
+        settings.setValue(SETTINGS_PREFIX + "tracewPattern", patterns["TRACEW"])
+        settings.setValue(SETTINGS_PREFIX + "segmentationPattern", segmentationPattern or "")
 
         manifestPath = os.path.join(os.path.abspath(rootDirectory), "review_manifest.json")
         try:
-            manifest = DataReviewLogic.scanDirectory(rootDirectory, imagePattern, segmentationPattern)
+            manifest = DataReviewLogic.scanDirectory(rootDirectory, patterns, segmentationPattern)
             previous = None
             if os.path.isfile(manifestPath):
                 with open(manifestPath, encoding="utf-8") as f:
@@ -544,11 +756,15 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.rootDirectoryLineEdit.addCurrentPathToHistory()
         self.ui.manifestPathLineEdit.currentPath = manifestPath
         self.ui.manifestPathLineEdit.addCurrentPathToHistory()
+        if self.ui.autoLoadCheckBox.checked:
+            qt.QSettings().setValue(SETTING_AUTOLOAD, manifestPath)
         self.ui.scanGroupBox.collapsed = True
         self.afterManifestLoaded()
-        slicer.util.infoDisplay(
-            _("Found {count} cases. Manifest written to:\n{path}").format(count=self.logic.caseCount(), path=manifestPath),
-            windowTitle=_("Data Review"))
+        missing = sum(1 for c in self.logic.cases if not c.get("segmentation"))
+        message = _("Found {count} cases. Manifest written to:\n{path}").format(count=self.logic.caseCount(), path=manifestPath)
+        if missing:
+            message += "\n" + _("{count} cases have no matching segmentation.").format(count=missing)
+        slicer.util.infoDisplay(message, windowTitle=_("Data Review"))
 
     def afterManifestLoaded(self):
         self._viewsFittedOnce = False
@@ -560,7 +776,7 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.showCase(index if index >= 0 else 0)
 
     def onReviewerChanged(self):
-        qt.QSettings().setValue(self.SETTINGS_PREFIX + "reviewer", self.ui.reviewerLineEdit.text)
+        qt.QSettings().setValue(SETTING_REVIEWER, self.ui.reviewerLineEdit.text)
 
     # ---- Navigation ------------------------------------------------------------------------------
 
@@ -591,17 +807,15 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         fit = (not self.ui.keepSlicePositionsCheckBox.checked) or (not self._viewsFittedOnce)
         try:
             with slicer.util.tryWithErrorDisplay(_("Failed to load case."), waitCursor=True):
-                self.logic.loadCase(index,
-                                    fitToViews=fit,
-                                    showSegmentation=self.ui.showSegmentationCheckBox.checked,
-                                    fillOpacity=self.ui.opacitySliderWidget.value)
+                self.logic.loadCase(index, fitToViews=fit, showSegmentation=self.ui.showSegmentationCheckBox.checked)
                 self._viewsFittedOnce = True
         finally:
             self.updateGUI()
 
     def onResetViews(self):
-        if self.logic.imageNode:
-            slicer.util.setSliceViewerLayers(background=self.logic.imageNode, fit=True)
+        if self.logic.imageNodes:
+            channels = [ch for ch in self.logic.channels if ch in self.logic.imageNodes] or list(self.logic.imageNodes)
+            self.logic.showInViews(channels, fitToViews=True)
 
     # ---- Decisions and comments ------------------------------------------------------------------
 
@@ -616,14 +830,23 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         except Exception as e:
             logging.error(f"DataReview: failed to save comment: {e}")
 
+    def onCommentTextChanged(self):
+        if not self._updatingGUI and self.ui.commentTextEdit.plainText.strip():
+            self.ui.rejectReasonLabel.hide()
+            self.ui.commentTextEdit.setStyleSheet("")
+
     def onDecision(self, status):
         index = self.logic.currentIndex
         if self.logic.manifest is None or index < 0:
             return
+        comment = self.ui.commentTextEdit.plainText
+        if status == STATUS_REJECTED and not comment.strip():
+            self.ui.rejectReasonLabel.show()
+            self.ui.commentTextEdit.setStyleSheet("QPlainTextEdit { border: 2px solid #c83c3c; }")
+            self.ui.commentTextEdit.setFocus()
+            return
         try:
-            self.logic.setDecision(index, status,
-                                   reviewer=self.ui.reviewerLineEdit.text.strip(),
-                                   comment=self.ui.commentTextEdit.plainText)
+            self.logic.setDecision(index, status, reviewer=self.ui.reviewerLineEdit.text.strip(), comment=comment)
         except Exception as e:
             slicer.util.errorDisplay(_("Failed to save decision: {error}").format(error=str(e)))
             return
@@ -660,10 +883,9 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 color = self.caseListColor(case)
                 if color:
                     item.setForeground(qt.QBrush(color))
-                tooltip = case["image"]
-                if case.get("segmentation"):
-                    tooltip += "\n" + case["segmentation"]
-                item.setToolTip(tooltip)
+                lines = [f"{ch}: {path or '(missing)'}" for ch, path in case["images"].items()]
+                lines.append(f"Segmentation: {case.get('segmentation') or '(none)'}")
+                item.setToolTip("\n".join(lines))
                 self.ui.caseListWidget.addItem(item)
         finally:
             self._updatingGUI = False
@@ -684,8 +906,11 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             hasCase = hasManifest and self.logic.currentIndex >= 0
             for widget in (self.ui.previousButton, self.ui.nextButton, self.ui.nextPendingButton, self.ui.caseListWidget):
                 widget.enabled = hasManifest and self.logic.caseCount() > 0
-            for widget in (self.ui.acceptButton, self.ui.rejectButton, self.ui.clearDecisionButton, self.ui.commentTextEdit):
+            for widget in (self.ui.acceptButton, self.ui.rejectButton, self.ui.removeDecisionButton, self.ui.commentTextEdit):
                 widget.enabled = hasCase
+            self.ui.rejectReasonLabel.hide()
+            self.ui.commentTextEdit.setStyleSheet("")
+            self.ui.showSegmentationCheckBox.checked = self.logic.segmentationVisible()
 
             if not hasManifest:
                 self.ui.progressLabel.text = _("No manifest loaded.")
@@ -711,10 +936,12 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 if case.get("reviewer") or case.get("reviewed_at"):
                     lines.append(_("Reviewed by {reviewer} at {time}").format(
                         reviewer=case.get("reviewer") or "?", time=case.get("reviewed_at") or "?"))
-                lines.append(_("Image: {path}").format(path=case["image"]))
+                for channel, path in case["images"].items():
+                    lines.append(f"{channel}: {path or _('(missing)')}")
                 lines.append(_("Segmentation: {path}").format(path=case.get("segmentation") or _("(none)")))
                 self.ui.caseInfoLabel.text = "<br>".join(lines)
                 self.ui.commentTextEdit.plainText = case.get("comment", "")
+                self.ui.removeDecisionButton.enabled = status != STATUS_PENDING
             else:
                 self.ui.caseInfoLabel.text = "-"
                 self.ui.commentTextEdit.plainText = ""
@@ -728,7 +955,7 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
 
 class DataReviewTest(ScriptedLoadableModuleTest):
-    """Tests the manifest logic on a small synthetic dataset and loads a case into the scene."""
+    """Tests the manifest logic on a small synthetic two-channel dataset and loads cases into the scene."""
 
     def setUp(self):
         slicer.mrmlScene.Clear()
@@ -739,19 +966,22 @@ class DataReviewTest(ScriptedLoadableModuleTest):
 
     def _writeSyntheticDataset(self, root, caseIds):
         import numpy as np
-        os.makedirs(os.path.join(root, "images"))
-        os.makedirs(os.path.join(root, "labels"))
+        for sub in ("adc", "tracew", "labels"):
+            os.makedirs(os.path.join(root, sub))
         for i, caseId in enumerate(caseIds):
             shape = (12, 16, 20)
-            image = np.random.default_rng(i).normal(100, 20, shape).astype("float32")
+            rng = np.random.default_rng(i)
+            adc = rng.normal(800, 100, shape).astype("float32")
+            tracew = rng.normal(100, 20, shape).astype("float32")
             label = np.zeros(shape, dtype="uint8")
             label[4:8, 5:10, 6:12] = 1
-            imageNode = slicer.util.addVolumeFromArray(image, name="tmpImage")
-            labelNode = slicer.util.addVolumeFromArray(label, name="tmpLabel", nodeClassName="vtkMRMLLabelMapVolumeNode")
-            self.assertTrue(slicer.util.saveNode(imageNode, os.path.join(root, "images", f"{caseId}.nii.gz")))
-            self.assertTrue(slicer.util.saveNode(labelNode, os.path.join(root, "labels", f"{caseId}_seg.nii.gz")))
-            slicer.mrmlScene.RemoveNode(imageNode)
-            slicer.mrmlScene.RemoveNode(labelNode)
+            for array, path, className in (
+                    (adc, os.path.join(root, "adc", f"{caseId}_adc.nii.gz"), None),
+                    (tracew, os.path.join(root, "tracew", f"{caseId}_tracew.nii.gz"), None),
+                    (label, os.path.join(root, "labels", f"{caseId}_seg.nii.gz"), "vtkMRMLLabelMapVolumeNode")):
+                node = slicer.util.addVolumeFromArray(array, name="tmp", nodeClassName=className)
+                self.assertTrue(slicer.util.saveNode(node, path))
+                slicer.mrmlScene.RemoveNode(node)
 
     def test_DataReview1(self):
         self.delayDisplay("Creating synthetic dataset")
@@ -760,11 +990,20 @@ class DataReviewTest(ScriptedLoadableModuleTest):
         self._writeSyntheticDataset(root, caseIds)
 
         self.delayDisplay("Scanning folder")
-        manifest = DataReviewLogic.scanDirectory(root, "images/*.nii.gz", "labels/*.nii.gz")
+        patterns = {"ADC": "adc/*.nii.gz", "TRACEW": "tracew/*.nii.gz"}
+        manifest = DataReviewLogic.scanDirectory(root, patterns, "labels/*.nii.gz")
+        self.assertEqual(manifest["channels"], ["ADC", "TRACEW"])
         self.assertEqual([c["id"] for c in manifest["cases"]], caseIds)
         for case in manifest["cases"]:
+            self.assertEqual(case["images"]["ADC"], os.path.join("adc", f"{case['id']}_adc.nii.gz"))
+            self.assertEqual(case["images"]["TRACEW"], os.path.join("tracew", f"{case['id']}_tracew.nii.gz"))
             self.assertIsNotNone(case["segmentation"], f"segmentation not paired for {case['id']}")
             self.assertEqual(case["status"], STATUS_PENDING)
+
+        self.delayDisplay("Case key derivation")
+        self.assertEqual(_caseKey(os.path.join(root, "x", "sub-009_ADC.nii.gz"), root), "sub-009")
+        self.assertEqual(_caseKey(os.path.join(root, "sub-010", "adc.nii.gz"), root), "sub-010")
+        self.assertEqual(_caseKey(os.path.join(root, "sub-011", "seg.nrrd"), root), "sub-011")
 
         manifestPath = os.path.join(root, "review_manifest.json")
         logic = DataReviewLogic()
@@ -772,21 +1011,32 @@ class DataReviewTest(ScriptedLoadableModuleTest):
         logic.save()
         self.assertTrue(os.path.isfile(manifestPath))
         self.assertEqual(logic.manifest["root"], ".", "root should be stored relative to the manifest")
-        self.assertEqual(logic.resolvePath(logic.case(0)["image"]), os.path.join(root, "images", "sub-001.nii.gz"))
+        self.assertEqual(logic.resolvePath(logic.case(0)["images"]["ADC"]), os.path.join(root, "adc", "sub-001_adc.nii.gz"))
 
         self.delayDisplay("Loading a case into the scene")
-        imageNode, segmentationNode = logic.loadCase(0, fitToViews=True)
-        self.assertIsNotNone(imageNode)
+        imageNodes, segmentationNode = logic.loadCase(0, fitToViews=True)
+        self.assertEqual(sorted(imageNodes.keys()), ["ADC", "TRACEW"])
         self.assertIsNotNone(segmentationNode)
         self.assertEqual(segmentationNode.GetSegmentation().GetNumberOfSegments(), 1)
         self.assertEqual(logic.currentIndex, 0)
+        layoutManager = slicer.app.layoutManager()
+        if layoutManager is not None:
+            self.assertEqual(layoutManager.layout, SIDE_BY_SIDE_LAYOUT_ID)
+            red = layoutManager.sliceWidget("Red").mrmlSliceCompositeNode()
+            yellow = layoutManager.sliceWidget("Yellow").mrmlSliceCompositeNode()
+            self.assertEqual(red.GetBackgroundVolumeID(), imageNodes["ADC"].GetID())
+            self.assertEqual(yellow.GetBackgroundVolumeID(), imageNodes["TRACEW"].GetID())
+            self.assertTrue(red.GetLinkedControl() and yellow.GetLinkedControl())
+            self.assertEqual(layoutManager.sliceWidget("Yellow").mrmlSliceNode().GetOrientation(), "Axial")
 
         logic.loadCase(1)
-        self.assertEqual(len(slicer.util.getNodesByClass("vtkMRMLScalarVolumeNode")), 1, "previous case should be removed")
+        self.assertEqual(len(slicer.util.getNodesByClass("vtkMRMLScalarVolumeNode")), 2, "previous case should be removed")
         self.assertEqual(len(slicer.util.getNodesByClass("vtkMRMLSegmentationNode")), 1)
 
         self.delayDisplay("Recording decisions")
         logic.setDecision(0, STATUS_ACCEPTED, reviewer="tester")
+        with self.assertRaises(ValueError):
+            logic.setDecision(1, STATUS_REJECTED, reviewer="tester", comment="   ")
         logic.setDecision(1, STATUS_REJECTED, reviewer="tester", comment="lesion mask too large")
         logic.setComment(2, "needs a second look")
         counts = logic.summary()
@@ -807,9 +1057,14 @@ class DataReviewTest(ScriptedLoadableModuleTest):
         self.assertEqual(logic2.case(2)["status"], STATUS_PENDING)
 
         self.delayDisplay("Rescanning preserves review state")
-        rescanned = DataReviewLogic.mergeReviewState(
-            DataReviewLogic.scanDirectory(root, "images/*.nii.gz", "labels/*.nii.gz"), logic2.manifest)
+        rescanned = DataReviewLogic.mergeReviewState(DataReviewLogic.scanDirectory(root, patterns, "labels/*.nii.gz"), logic2.manifest)
         self.assertEqual(rescanned["cases"][1]["status"], STATUS_REJECTED)
+
+        self.delayDisplay("Version 1 manifests are upgraded")
+        v1 = {"cases": [{"id": "a", "image": "adc/sub-001_adc.nii.gz"}]}
+        DataReviewLogic.validate(v1)
+        self.assertEqual(v1["cases"][0]["images"], {"Image": "adc/sub-001_adc.nii.gz"})
+        self.assertEqual(v1["channels"], ["Image"])
 
         logic.setDecision(0, STATUS_PENDING)
         self.assertEqual(logic.case(0)["reviewer"], "")

@@ -12,124 +12,6 @@
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
-    <widget class="ctkCollapsibleButton" name="datasetCollapsibleButton">
-     <property name="text">
-      <string>Dataset</string>
-     </property>
-     <layout class="QFormLayout" name="datasetFormLayout">
-      <item row="0" column="0">
-       <widget class="QLabel" name="manifestLabel">
-        <property name="text">
-         <string>Manifest file:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="0" column="1">
-       <layout class="QHBoxLayout" name="manifestLayout">
-        <item>
-         <widget class="ctkPathLineEdit" name="manifestPathLineEdit">
-          <property name="toolTip">
-           <string>JSON file listing the cases and holding the review state (status, comment, reviewer).</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QPushButton" name="loadManifestButton">
-          <property name="text">
-           <string>Load</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item row="1" column="0" colspan="2">
-       <widget class="ctkCollapsibleGroupBox" name="scanGroupBox">
-        <property name="title">
-         <string>Create manifest from folder</string>
-        </property>
-        <property name="collapsed">
-         <bool>true</bool>
-        </property>
-        <layout class="QFormLayout" name="scanFormLayout">
-         <item row="0" column="0">
-          <widget class="QLabel" name="rootLabel">
-           <property name="text">
-            <string>Dataset folder:</string>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="1">
-          <widget class="ctkPathLineEdit" name="rootDirectoryLineEdit">
-           <property name="toolTip">
-            <string>Folder that contains the images and segmentations. Patterns below are relative to this folder.</string>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="0">
-          <widget class="QLabel" name="imagePatternLabel">
-           <property name="text">
-            <string>Image pattern:</string>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="1">
-          <widget class="QLineEdit" name="imagePatternLineEdit">
-           <property name="text">
-            <string>images/*.nii.gz</string>
-           </property>
-           <property name="toolTip">
-            <string>Glob pattern (relative to the dataset folder) matching the image files. ** matches sub-folders.</string>
-           </property>
-          </widget>
-         </item>
-         <item row="2" column="0">
-          <widget class="QLabel" name="segmentationPatternLabel">
-           <property name="text">
-            <string>Segmentation pattern:</string>
-           </property>
-          </widget>
-         </item>
-         <item row="2" column="1">
-          <widget class="QLineEdit" name="segmentationPatternLineEdit">
-           <property name="text">
-            <string>labels/*.nii.gz</string>
-           </property>
-           <property name="toolTip">
-            <string>Glob pattern matching the segmentation files. Files are paired with images by their base name (an optional suffix such as _seg or _lesion is ignored).</string>
-           </property>
-          </widget>
-         </item>
-         <item row="3" column="0" colspan="2">
-          <widget class="QPushButton" name="scanButton">
-           <property name="text">
-            <string>Scan folder and create manifest</string>
-           </property>
-           <property name="toolTip">
-            <string>Scans the folder, writes a new manifest JSON next to it, and loads it. Existing review state in a manifest with the same path is preserved.</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </widget>
-      </item>
-      <item row="2" column="0">
-       <widget class="QLabel" name="reviewerLabel">
-        <property name="text">
-         <string>Reviewer:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="2" column="1">
-       <widget class="QLineEdit" name="reviewerLineEdit">
-        <property name="placeholderText">
-         <string>Your name or initials (stored with each decision)</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
     <widget class="ctkCollapsibleButton" name="reviewCollapsibleButton">
      <property name="text">
       <string>Review</string>
@@ -158,46 +40,12 @@
          <string>Click a case to display it.</string>
         </property>
         <property name="minimumHeight">
-         <number>120</number>
+         <number>100</number>
         </property>
         <property name="maximumHeight">
-         <number>220</number>
+         <number>180</number>
         </property>
        </widget>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="navigationLayout">
-        <item>
-         <widget class="QPushButton" name="previousButton">
-          <property name="text">
-           <string>◀ Previous</string>
-          </property>
-          <property name="toolTip">
-           <string>Shortcut: Left arrow or P</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QPushButton" name="nextButton">
-          <property name="text">
-           <string>Next ▶</string>
-          </property>
-          <property name="toolTip">
-           <string>Shortcut: Right arrow or N</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QPushButton" name="nextPendingButton">
-          <property name="text">
-           <string>Next unreviewed</string>
-          </property>
-          <property name="toolTip">
-           <string>Shortcut: U</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
       </item>
       <item>
        <widget class="QLabel" name="caseInfoLabel">
@@ -215,17 +63,27 @@
       <item>
        <widget class="QLabel" name="commentLabel">
         <property name="text">
-         <string>Comment:</string>
+         <string>Comment (required when rejecting):</string>
         </property>
        </widget>
       </item>
       <item>
        <widget class="QPlainTextEdit" name="commentTextEdit">
         <property name="placeholderText">
-         <string>Notes about this case (saved automatically)</string>
+         <string>Notes about this case. Saved automatically.</string>
         </property>
         <property name="maximumHeight">
-         <number>110</number>
+         <number>90</number>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="rejectReasonLabel">
+        <property name="text">
+         <string>Please write a comment explaining why the case is rejected.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
         </property>
        </widget>
       </item>
@@ -234,7 +92,10 @@
         <item>
          <widget class="QPushButton" name="acceptButton">
           <property name="text">
-           <string>✓ Accept</string>
+           <string>✓  ACCEPT</string>
+          </property>
+          <property name="minimumHeight">
+           <number>52</number>
           </property>
           <property name="toolTip">
            <string>Mark the case as accepted and move to the next one. Shortcut: A</string>
@@ -244,26 +105,264 @@
         <item>
          <widget class="QPushButton" name="rejectButton">
           <property name="text">
-           <string>✗ Reject</string>
+           <string>✗  REJECT</string>
+          </property>
+          <property name="minimumHeight">
+           <number>52</number>
           </property>
           <property name="toolTip">
-           <string>Mark the case as rejected and move to the next one. Shortcut: R</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QPushButton" name="clearDecisionButton">
-          <property name="text">
-           <string>Clear</string>
-          </property>
-          <property name="toolTip">
-           <string>Set the case back to pending (comment is kept).</string>
+           <string>Mark the case as rejected (a comment is required) and move to the next one. Shortcut: R</string>
           </property>
          </widget>
         </item>
        </layout>
       </item>
       <item>
+       <layout class="QHBoxLayout" name="navigationLayout">
+        <item>
+         <widget class="QPushButton" name="previousButton">
+          <property name="text">
+           <string>◀ Previous</string>
+          </property>
+          <property name="minimumHeight">
+           <number>36</number>
+          </property>
+          <property name="toolTip">
+           <string>Shortcut: Left arrow or P</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="nextButton">
+          <property name="text">
+           <string>Next ▶</string>
+          </property>
+          <property name="minimumHeight">
+           <number>36</number>
+          </property>
+          <property name="toolTip">
+           <string>Shortcut: Right arrow or N</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="nextPendingButton">
+          <property name="text">
+           <string>Next unreviewed</string>
+          </property>
+          <property name="minimumHeight">
+           <number>36</number>
+          </property>
+          <property name="toolTip">
+           <string>Shortcut: U</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="secondaryLayout">
+        <item>
+         <widget class="QPushButton" name="removeDecisionButton">
+          <property name="text">
+           <string>Remove decision</string>
+          </property>
+          <property name="toolTip">
+           <string>Set this case back to unreviewed. The comment is kept.</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="showSegmentationCheckBox">
+          <property name="text">
+           <string>Show segmentation</string>
+          </property>
+          <property name="toolTip">
+           <string>Shortcut: S</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="resetViewsButton">
+          <property name="text">
+           <string>Reset views</string>
+          </property>
+          <property name="toolTip">
+           <string>Re-center and re-fit both views on the current images.</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QLabel" name="shortcutsLabel">
+        <property name="text">
+         <string>&lt;small&gt;Keys: &lt;b&gt;A&lt;/b&gt; accept, &lt;b&gt;R&lt;/b&gt; reject, &lt;b&gt;→&lt;/b&gt;/&lt;b&gt;←&lt;/b&gt; next/previous, &lt;b&gt;U&lt;/b&gt; next unreviewed, &lt;b&gt;S&lt;/b&gt; show/hide segmentation&lt;/small&gt;</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="datasetCollapsibleButton">
+     <property name="text">
+      <string>Dataset and setup</string>
+     </property>
+     <layout class="QFormLayout" name="datasetFormLayout">
+      <item row="0" column="0">
+       <widget class="QLabel" name="manifestLabel">
+        <property name="text">
+         <string>Manifest file:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <layout class="QHBoxLayout" name="manifestLayout">
+        <item>
+         <widget class="ctkPathLineEdit" name="manifestPathLineEdit">
+          <property name="toolTip">
+           <string>JSON file listing the cases and holding the review state (status, comment, reviewer).</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="loadManifestButton">
+          <property name="text">
+           <string>Load</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="reviewerLabel">
+        <property name="text">
+         <string>Reviewer:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="reviewerLineEdit">
+        <property name="placeholderText">
+         <string>Name or initials, stored with each decision</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QCheckBox" name="autoLoadCheckBox">
+        <property name="text">
+         <string>Open this manifest automatically when Slicer starts</string>
+        </property>
+        <property name="toolTip">
+         <string>Together with setting Data Review as the home module (Edit, Application Settings, Modules), the review opens by itself at startup.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0" colspan="2">
+       <widget class="QCheckBox" name="simplifiedUICheckBox">
+        <property name="text">
+         <string>Simplified interface at startup (hide menus, toolbars, help)</string>
+        </property>
+        <property name="toolTip">
+         <string>Takes effect the next time Slicer starts. Press Ctrl+Shift+U at any time to show or hide the full interface.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0" colspan="2">
+       <widget class="ctkCollapsibleGroupBox" name="scanGroupBox">
+        <property name="title">
+         <string>Create manifest from folder</string>
+        </property>
+        <property name="collapsed">
+         <bool>true</bool>
+        </property>
+        <layout class="QFormLayout" name="scanFormLayout">
+         <item row="0" column="0">
+          <widget class="QLabel" name="rootLabel">
+           <property name="text">
+            <string>Dataset folder:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="ctkPathLineEdit" name="rootDirectoryLineEdit">
+           <property name="toolTip">
+            <string>Folder that contains the images and segmentations. Patterns below are relative to this folder.</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="adcPatternLabel">
+           <property name="text">
+            <string>ADC pattern:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="QLineEdit" name="adcPatternLineEdit">
+           <property name="text">
+            <string>adc/*.nii.gz</string>
+           </property>
+           <property name="toolTip">
+            <string>Glob pattern (relative to the dataset folder) matching the ADC images. ** matches sub-folders. Leave empty if there is no ADC image.</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="0">
+          <widget class="QLabel" name="tracewPatternLabel">
+           <property name="text">
+            <string>TRACEW pattern:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QLineEdit" name="tracewPatternLineEdit">
+           <property name="text">
+            <string>tracew/*.nii.gz</string>
+           </property>
+           <property name="toolTip">
+            <string>Glob pattern matching the trace-weighted (DWI) images. Leave empty if there is no TRACEW image.</string>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="0">
+          <widget class="QLabel" name="segmentationPatternLabel">
+           <property name="text">
+            <string>Segmentation pattern:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="1">
+          <widget class="QLineEdit" name="segmentationPatternLineEdit">
+           <property name="text">
+            <string>labels/*.nii.gz</string>
+           </property>
+           <property name="toolTip">
+            <string>Glob pattern matching the lesion segmentation files. Files are paired with images by case name (suffixes such as _adc, _tracew, _seg are ignored).</string>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="0" colspan="2">
+          <widget class="QPushButton" name="scanButton">
+           <property name="text">
+            <string>Scan folder and create manifest</string>
+           </property>
+           <property name="toolTip">
+            <string>Scans the folder, writes review_manifest.json into it, and loads it. Existing decisions in that manifest are preserved.</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item row="5" column="0" colspan="2">
        <widget class="QCheckBox" name="advanceAfterDecisionCheckBox">
         <property name="text">
          <string>Advance to next unreviewed case after a decision</string>
@@ -273,85 +372,20 @@
         </property>
        </widget>
       </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="ctkCollapsibleButton" name="displayCollapsibleButton">
-     <property name="text">
-      <string>Display</string>
-     </property>
-     <layout class="QFormLayout" name="displayFormLayout">
-      <item row="0" column="0" colspan="2">
-       <widget class="QCheckBox" name="showSegmentationCheckBox">
-        <property name="text">
-         <string>Show segmentation</string>
-        </property>
-        <property name="toolTip">
-         <string>Shortcut: S</string>
-        </property>
-        <property name="checked">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="0">
-       <widget class="QLabel" name="opacityLabel">
-        <property name="text">
-         <string>Fill opacity:</string>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="1">
-       <widget class="ctkSliderWidget" name="opacitySliderWidget">
-        <property name="decimals">
-         <number>2</number>
-        </property>
-        <property name="singleStep">
-         <double>0.05</double>
-        </property>
-        <property name="minimum">
-         <double>0.0</double>
-        </property>
-        <property name="maximum">
-         <double>1.0</double>
-        </property>
-        <property name="value">
-         <double>0.5</double>
-        </property>
-       </widget>
-      </item>
-      <item row="2" column="0" colspan="2">
+      <item row="6" column="0" colspan="2">
        <widget class="QCheckBox" name="keepSlicePositionsCheckBox">
         <property name="text">
          <string>Keep slice positions when switching cases</string>
         </property>
         <property name="toolTip">
-         <string>Assumes all images share the same physical space. Uncheck to fit each new image to the views.</string>
+         <string>Assumes all images share the same physical space. Uncheck to fit each new case to the views.</string>
         </property>
         <property name="checked">
          <bool>true</bool>
         </property>
        </widget>
       </item>
-      <item row="3" column="0" colspan="2">
-       <widget class="QPushButton" name="resetViewsButton">
-        <property name="text">
-         <string>Reset views to current image</string>
-        </property>
-       </widget>
-      </item>
      </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QLabel" name="shortcutsLabel">
-     <property name="text">
-      <string>&lt;small&gt;Shortcuts: &lt;b&gt;A&lt;/b&gt; accept, &lt;b&gt;R&lt;/b&gt; reject, &lt;b&gt;N&lt;/b&gt;/&lt;b&gt;→&lt;/b&gt; next, &lt;b&gt;P&lt;/b&gt;/&lt;b&gt;←&lt;/b&gt; previous, &lt;b&gt;U&lt;/b&gt; next unreviewed, &lt;b&gt;S&lt;/b&gt; toggle segmentation&lt;/small&gt;</string>
-     </property>
-     <property name="wordWrap">
-      <bool>true</bool>
-     </property>
     </widget>
    </item>
    <item>
@@ -386,11 +420,6 @@
    <class>ctkPathLineEdit</class>
    <extends>QWidget</extends>
    <header>ctkPathLineEdit.h</header>
-  </customwidget>
-  <customwidget>
-   <class>ctkSliderWidget</class>
-   <extends>QWidget</extends>
-   <header>ctkSliderWidget.h</header>
   </customwidget>
   <customwidget>
    <class>qMRMLWidget</class>

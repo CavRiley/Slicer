@@ -1,121 +1,159 @@
 # Data Review module
 
-A 3D Slicer module for stepping through a dataset of images and their segmentations
-(for example stroke lesion masks) and recording an **accept / reject** decision and a
-**comment** for each case. Progress is stored in a single JSON *manifest* file that lives
-next to the data, so a review can be paused, resumed, moved, or continued on another machine.
+A 3D Slicer module for reviewing a dataset of diffusion MRI cases (ADC and trace-weighted images)
+with their stroke lesion segmentations. The reviewer sees both images side by side in locked axial
+views with the lesion overlaid, and presses **Accept** or **Reject** (with a comment) for each case.
+Progress is stored in a JSON *manifest* next to the data, so a review can be paused, resumed, or
+moved to another machine.
 
-## Installation
+The module is designed so that a technical person sets up a machine once, and a non-technical
+reviewer then only starts Slicer and presses buttons.
 
-The module is a self-contained folder: `Modules/Scripted/DataReview`. There are three ways to use it.
+## Setting up a review machine
 
-1. **Installed Slicer, no build (recommended).** Copy or clone this folder onto the machine, then in
-   Slicer open *Edit → Application Settings → Modules*, add the folder to *Additional module paths*,
-   and restart Slicer. The module appears under *Modules → Utilities → Data Review*.
-   Tested with Slicer 5.12.3; it uses only standard Slicer Python APIs.
-2. **Source build.** The module is registered in `Modules/Scripted/CMakeLists.txt`, so a Slicer built
-   from this branch includes it automatically.
-3. **Command line.** Point Slicer at the folder for a single session:
+You need: an installed Slicer (tested with 5.12.3, no source build required), this module folder
+(`Modules/Scripted/DataReview`), and the dataset folder.
+
+1. **Copy** the `DataReview` folder and the dataset folder onto the machine.
+2. **Create the manifest** once (skip if the dataset folder already contains `review_manifest.json`):
+   start Slicer, add the module folder under *Edit → Application Settings → Modules → Additional
+   module paths*, restart, open *Modules → Utilities → Data Review*, expand *Dataset and setup →
+   Create manifest from folder*, pick the dataset folder, check the three patterns, and press
+   *Scan folder and create manifest*. The manifest is written into the dataset folder.
+3. **Configure startup** by running the setup script once from a terminal (Slicer exits when it is done):
 
    ```
-   Slicer --additional-module-paths /path/to/DataReview
+   # macOS
+   /Applications/Slicer.app/Contents/MacOS/Slicer --python-script /path/to/DataReview/Scripts/setup_review_station.py \
+       --manifest /path/to/dataset/review_manifest.json --reviewer "JD"
+
+   # Windows
+   "C:\Program Files\Slicer 5.12.3\Slicer.exe" --python-script C:\path\to\DataReview\Scripts\setup_review_station.py ^
+       --manifest D:\dataset\review_manifest.json --reviewer "JD"
    ```
+
+   This registers the module path, makes Data Review the module that opens at startup, opens the
+   manifest automatically, stores the reviewer name, and switches on the simplified interface.
+   Add `--full-ui` to keep the normal Slicer menus and toolbars, or `--reset` to undo everything.
+
+   The same can be done by hand: set the home module in *Edit → Application Settings → Modules*,
+   and in the module tick *Open this manifest automatically when Slicer starts* and
+   *Simplified interface at startup*.
+
+4. **Start Slicer.** It opens directly in Data Review, loads the first unreviewed case, and shows
+   nothing but the review panel and the two image views. Settings are per user account, so run the
+   setup under the account the reviewer will use.
+
+Press **Ctrl+Shift+U** at any time to bring back the full Slicer interface (and again to hide it).
+
+### A lighter Slicer
+
+The simplified interface hides the other modules rather than removing them, which is enough for
+reviewers and keeps the install a plain download. If a genuinely stripped-down build is wanted later,
+Slicer supports that from this source tree with the CMake options `Slicer_QTLOADABLEMODULES_DISABLED`,
+`Slicer_QTSCRIPTEDMODULES_DISABLED` and `Slicer_CLIMODULES_DISABLED`, or by packaging the module as a
+[Slicer custom application](https://github.com/KitwareMedical/SlicerCustomAppTemplate).
 
 ## Expected data layout
 
-Images and segmentations are matched by **base name**. The default patterns assume:
+Images and segmentations are matched by **case name**. The default patterns assume:
 
 ```
 dataset/
-  images/sub-001.nii.gz
-  images/sub-002.nii.gz
+  adc/sub-001_adc.nii.gz
+  tracew/sub-001_tracew.nii.gz
   labels/sub-001_seg.nii.gz
-  labels/sub-002_seg.nii.gz
+  ...
   review_manifest.json      <- created by the module
 ```
 
-Both patterns are glob expressions relative to the dataset folder and support `**` for
-sub-folders. Suffixes such as `_seg`, `_label`, `_mask`, `_lesion`, `_gt` on segmentation
-files are ignored when pairing. For per-case folders (`sub-001/image.nii.gz` and
-`sub-001/seg.nii.gz`) use patterns like `*/image.nii.gz` and `*/seg.nii.gz`; the folder name
-becomes the case id. Any format Slicer can read works (NIfTI, NRRD, MHA, ...). All images are
-assumed to share one physical space, so slice positions are kept between cases.
+The three patterns are glob expressions relative to the dataset folder and support `**` for
+sub-folders. When pairing, the extension and a trailing channel or label suffix (`_adc`, `_tracew`,
+`_dwi`, `_b1000`, `_seg`, `_label`, `_mask`, `_lesion`, `_gt`, ...) are removed, so `sub-001_adc.nii.gz`,
+`sub-001_tracew.nii.gz` and `sub-001_seg.nii.gz` all belong to case `sub-001`. For per-case folders
+such as `sub-001/adc.nii.gz` the folder name is the case id; use patterns like `*/adc.nii.gz`.
+Any format Slicer reads works (NIfTI, NRRD, MHA, ...). Cases missing one channel or the
+segmentation are still listed and the missing part is simply not shown.
 
-## Workflow
+All images are assumed to share one physical space, so slice positions are kept between cases.
 
-1. **Reviewer**: enter your name or initials. It is saved with every decision and remembered between sessions.
-2. **Create a manifest**: expand *Create manifest from folder*, pick the dataset folder, adjust the two
-   patterns if needed, and press *Scan folder and create manifest*. This writes `review_manifest.json`
-   into the dataset folder and opens the first unreviewed case. Re-scanning the same folder keeps
-   existing decisions and comments.
-3. **Load an existing manifest** instead with *Manifest file → Load*. The review resumes at the first
-   unreviewed case.
-4. **Review**: look at the image and overlay, type a comment if needed, then press *Accept* or *Reject*.
-   The decision is written to disk immediately and the next unreviewed case opens (uncheck
-   *Advance to next unreviewed case* to stay). *Clear* sets a case back to pending. Comments are saved
-   whenever you leave a case, even without a decision.
-5. **Navigate** with the buttons, by clicking a case in the list, or with the keyboard.
+## Reviewing
+
+The panel shows, from top to bottom: progress, the case list (green ✓ accepted, red ✗ rejected,
+💬 has a comment), the current case, the comment box, the big **ACCEPT** / **REJECT** buttons, and
+the navigation buttons.
+
+- **Accept** records the decision and moves to the next unreviewed case.
+- **Reject** requires a comment describing why. Without one the comment box turns red and the
+  decision is not recorded.
+- Comments are saved whenever you leave a case, with or without a decision.
+- **Remove decision** sets a reviewed case back to unreviewed (the comment is kept).
+- The left view shows ADC, the right view TRACEW. They are locked: scrolling or zooming one moves the
+  other. The segmentation is overlaid on both. *Show segmentation* and *Reset views* are below the
+  navigation buttons.
 
 | Key | Action |
 | --- | --- |
 | `A` | Accept and advance |
-| `R` | Reject and advance |
+| `R` | Reject and advance (needs a comment) |
 | `N` / `→` | Next case |
 | `P` / `←` | Previous case |
 | `U` | Next unreviewed case |
-| `S` | Toggle segmentation visibility |
+| `S` | Show / hide the segmentation |
+| `Ctrl+Shift+U` | Show / hide the full Slicer interface |
 
 Shortcuts are active only while the module is open and are ignored while typing in a text field.
-The *Display* section has a fill-opacity slider, the keep-slice-positions toggle, and a
-*Reset views* button if the field of view drifts.
 
 ## The manifest file
 
 ```json
 {
   "format": "SlicerDataReview",
-  "version": 1,
+  "version": 2,
   "root": ".",
+  "channels": ["ADC", "TRACEW"],
   "cases": [
     {
       "id": "sub-001",
-      "image": "images/sub-001.nii.gz",
+      "images": {
+        "ADC": "adc/sub-001_adc.nii.gz",
+        "TRACEW": "tracew/sub-001_tracew.nii.gz"
+      },
       "segmentation": "labels/sub-001_seg.nii.gz",
-      "status": "accepted",
-      "comment": "small lesion, mask slightly over-segmented",
-      "reviewer": "cr",
-      "reviewed_at": "2026-10-06T01:10:16+00:00"
+      "status": "rejected",
+      "comment": "mask extends into CSF",
+      "reviewer": "JD",
+      "reviewed_at": "2026-10-13T17:18:06+00:00"
     }
   ]
 }
 ```
 
-- `status` is one of `pending`, `accepted`, `rejected`. `reviewed_at` is a UTC timestamp.
-- `image` and `segmentation` are resolved against `root`; a relative `root` is resolved against the
-  folder containing the manifest. `segmentation` may be `null`.
-- The file is rewritten atomically (temp file + rename) after every change, so a crash never leaves
-  it half-written.
-- The manifest can also be written by hand or by a script; only `id` and `image` are required per case.
+- `status` is `pending`, `accepted` or `rejected`; `reviewed_at` is a UTC timestamp.
+- `images` maps channel name to file; channels are displayed in the order of `channels`
+  (first in the left view, second in the right). `segmentation` or a channel may be `null`.
+- Paths are resolved against `root`; a relative `root` is relative to the manifest's folder.
+- The file is rewritten atomically after every change (temporary file, then rename).
+- Only `id` and `images` are required per case, so a manifest can also be produced by a script.
+  Older version-1 manifests with a single `image` entry are upgraded automatically on load.
 
-## Using it across machines
+## Moving a review between machines
 
-Because every path in the manifest is relative to the manifest file, the whole dataset folder
-(images, segmentations, and `review_manifest.json`) can be copied, synced, or mounted anywhere and
-opened with *Load* without edits. Practical notes:
+All paths in the manifest are relative to the manifest file, so the whole dataset folder (images,
+segmentations and `review_manifest.json`) can be copied, synced, or mounted anywhere and opened
+without edits. Practical notes:
 
-- Keep the manifest **inside** the dataset folder. If you store it elsewhere, set `root` to the
-  dataset path (absolute, or relative to the manifest).
+- Keep the manifest **inside** the dataset folder. If it must live elsewhere, set `root` to the
+  dataset path.
 - The module never merges concurrent edits. For several reviewers, give each their own copy
-  (for example `review_manifest_cr.json`) and compare them afterwards with a script. Two people
-  writing the same file at the same time over a shared drive will overwrite each other.
-- The manifest is plain JSON and diffs cleanly, so it can be versioned with Git alongside a small
-  dataset or a data-tracking tool such as DVC for larger ones.
-- Reviewer name, last manifest path, and the two glob patterns are stored in Slicer's own
-  settings on each machine, not in the manifest.
+  (for example `review_manifest_jd.json`) and compare afterwards. Two people writing the same
+  file at once over a shared drive will overwrite each other.
+- The manifest is plain JSON and diffs cleanly, so it can be versioned with Git next to a small
+  dataset, or with DVC for larger ones.
+- Reviewer name, startup manifest, interface mode and glob patterns are Slicer settings on each
+  machine, not part of the manifest. Re-run the setup script on each new machine.
 
 ## Summarizing results
-
-The manifest is easy to post-process. For example, to list rejected cases:
 
 ```python
 import json
@@ -127,10 +165,9 @@ for c in m["cases"]:
 
 ## Running the self-test
 
-The module ships a test that builds a synthetic dataset, scans it, loads cases, and checks the
-manifest round trip. Run it from Slicer's Python console with
-`slicer.util.selectModule("DataReview")` followed by the *Reload and Test* button in developer mode,
-or headlessly:
+The module ships a test that builds a synthetic two-channel dataset, scans it, loads cases into the
+side-by-side layout, and checks the manifest round trip. In Slicer, enable developer mode
+(*Edit → Application Settings → Developer*) and press *Reload and Test* in the module, or run headlessly:
 
 ```
 Slicer --no-main-window --testing --additional-module-paths /path/to/DataReview \

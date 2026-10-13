@@ -9,6 +9,7 @@ set(MODULE_PYTHON_SCRIPTS
 set(MODULE_PYTHON_RESOURCES
   Resources/Icons/${MODULE_NAME}.svg
   Resources/UI/${MODULE_NAME}.ui
+  Scripts/setup_review_station.py
   )
 
 #-----------------------------------------------------------------------------
