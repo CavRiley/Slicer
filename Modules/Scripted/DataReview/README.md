@@ -1,8 +1,9 @@
 # Data Review module
 
 A 3D Slicer module for reviewing a dataset of diffusion MRI cases (ADC and trace-weighted images)
-with their stroke lesion segmentations. The reviewer sees both images side by side in locked axial
-views with the lesion overlaid, and presses **Accept** or **Reject** (with a comment) for each case.
+with their stroke lesion segmentations. Both images are loaded into axial, sagittal and coronal views
+with the lesion overlaid; a slider switches the view between ADC and TRACEW. The reviewer presses
+**Accept** or **Reject** (with a comment) for each case.
 Progress is stored in a JSON *manifest* next to the data, so a review can be paused, resumed, or
 moved to another machine.
 
@@ -88,9 +89,12 @@ the navigation buttons.
   decision is not recorded.
 - Comments are saved whenever you leave a case, with or without a decision.
 - **Remove decision** sets a reviewed case back to unreviewed (the comment is kept).
-- The left view shows ADC, the right view TRACEW. They are locked: scrolling or zooming one moves the
-  other. The segmentation is overlaid on both. *Show segmentation* and *Reset views* are below the
-  navigation buttons.
+- The three views are fixed to axial (large, left), sagittal and coronal (right) and are linked, so
+  scrolling, zooming, or changing layers in one view applies to the others.
+- Both images are in every view: ADC as the background layer, TRACEW as the foreground layer. The
+  *ADC ◀ ▶ TRACEW* slider in the panel (or the opacity slider in any view controller, or the `T` key)
+  blends between them: 0 shows only ADC, 1 shows only TRACEW. The segmentation is overlaid on top.
+- *Show segmentation* and *Reset views* are below the navigation buttons.
 
 | Key | Action |
 | --- | --- |
@@ -100,6 +104,7 @@ the navigation buttons.
 | `P` / `←` | Previous case |
 | `U` | Next unreviewed case |
 | `S` | Show / hide the segmentation |
+| `T` | Switch between ADC and TRACEW |
 | `Ctrl+Shift+U` | Show / hide the full Slicer interface |
 
 Shortcuts are active only while the module is open and are ignored while typing in a text field.
@@ -130,8 +135,8 @@ Shortcuts are active only while the module is open and are ignored while typing 
 ```
 
 - `status` is `pending`, `accepted` or `rejected`; `reviewed_at` is a UTC timestamp.
-- `images` maps channel name to file; channels are displayed in the order of `channels`
-  (first in the left view, second in the right). `segmentation` or a channel may be `null`.
+- `images` maps channel name to file; the first entry of `channels` is the background layer and the
+  second the foreground layer. `segmentation` or a channel may be `null`.
 - Paths are resolved against `root`; a relative `root` is relative to the manifest's folder.
 - The file is rewritten atomically after every change (temporary file, then rename).
 - Only `id` and `images` are required per case, so a manifest can also be produced by a script.
@@ -166,7 +171,7 @@ for c in m["cases"]:
 ## Running the self-test
 
 The module ships a test that builds a synthetic two-channel dataset, scans it, loads cases into the
-side-by-side layout, and checks the manifest round trip. In Slicer, enable developer mode
+review layout, and checks the manifest round trip. In Slicer, enable developer mode
 (*Edit → Application Settings → Developer*) and press *Reload and Test* in the module, or run headlessly:
 
 ```

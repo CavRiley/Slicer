@@ -38,11 +38,14 @@ segmentations, and accept or reject each case with a comment.</p>
 
 <p>The list of cases and the review state (status, comment, reviewer, timestamp) live in a single
 JSON <i>manifest</i> file that is saved automatically after every change. The ADC and TRACEW images are
-shown side by side in linked (locked) axial views with the segmentation overlaid on both.</p>
+loaded into every view as background and foreground layers: the opacity slider in the view controller
+(or the blend slider in the panel, or the <b>T</b> key) switches between them. The three views are fixed to
+axial, sagittal and coronal and are linked, and the segmentation is overlaid on all of them.</p>
 
 <p>Keyboard shortcuts (active while this module is open): <b>A</b> accept, <b>R</b> reject,
 <b>N</b>/<b>Right</b> next, <b>P</b>/<b>Left</b> previous, <b>U</b> next unreviewed,
-<b>S</b> toggle segmentation visibility, <b>Ctrl+Shift+U</b> toggle the simplified interface.</p>
+<b>S</b> toggle segmentation visibility, <b>T</b> switch between ADC and TRACEW,
+<b>Ctrl+Shift+U</b> toggle the simplified interface.</p>
 """)
         self.parent.acknowledgementText = _("""
 Developed for reviewing imaging datasets and their stroke lesion segmentations.
@@ -63,9 +66,10 @@ MANIFEST_VERSION = 2
 
 DEFAULT_CHANNELS = ["ADC", "TRACEW"]
 
-# Layout id for the custom side-by-side axial layout (must not collide with built-in layouts).
-SIDE_BY_SIDE_LAYOUT_ID = 1503
-SIDE_BY_SIDE_VIEWS = ["Red", "Yellow"]
+# Layout id for the custom review layout (must not collide with built-in layouts).
+REVIEW_LAYOUT_ID = 1504
+# Slice views used for review and the orientation each one is locked to.
+REVIEW_VIEWS = {"Red": "Axial", "Yellow": "Sagittal", "Green": "Coronal"}
 
 # Suffixes appended to file names that identify a channel or a segmentation; stripped before pairing.
 PAIRING_SUFFIXES = ("_adc", "-adc", "_tracew", "-tracew", "_trace", "-trace", "_dwi", "-dwi", "_b1000", "-b1000",
@@ -397,34 +401,36 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
     # ---- Layout ----------------------------------------------------------------------------------
 
     @staticmethod
-    def sideBySideLayoutXml():
-        items = []
-        for viewName, color in zip(SIDE_BY_SIDE_VIEWS, ("#F34A33", "#EDD54C")):
-            items.append(f"""
-   <item>
-    <view class="vtkMRMLSliceNode" singletontag="{viewName}">
-     <property name="orientation" action="default">Axial</property>
-     <property name="viewlabel" action="default">{viewName[0]}</property>
-     <property name="viewcolor" action="default">{color}</property>
-    </view>
-   </item>""")
-        return '<layout type="horizontal" split="true">' + "".join(items) + "\n  </layout>"
+    def reviewLayoutXml():
+        """Large axial view on the left, sagittal and coronal stacked on the right."""
+        def view(name, orientation, color):
+            return f"""
+    <item>
+     <view class="vtkMRMLSliceNode" singletontag="{name}">
+      <property name="orientation" action="default">{orientation}</property>
+      <property name="viewlabel" action="default">{name[0]}</property>
+      <property name="viewcolor" action="default">{color}</property>
+     </view>
+    </item>"""
+        return (
+            '<layout type="horizontal" split="true">'
+            + view("Red", "Axial", "#F34A33")
+            + '\n   <item>\n    <layout type="vertical">'
+            + view("Yellow", "Sagittal", "#EDD54C")
+            + view("Green", "Coronal", "#6EB04B")
+            + "\n    </layout>\n   </item>\n  </layout>"
+        )
 
     @staticmethod
-    def applyLayout(numberOfChannels):
-        """Show one axial view for a single channel, or two linked axial views side by side."""
+    def applyLayout():
         layoutManager = slicer.app.layoutManager()
         if layoutManager is None:
             return
         layoutNode = layoutManager.layoutLogic().GetLayoutNode()
-        if numberOfChannels >= 2:
-            if not layoutNode.IsLayoutDescription(SIDE_BY_SIDE_LAYOUT_ID):
-                layoutNode.AddLayoutDescription(SIDE_BY_SIDE_LAYOUT_ID, DataReviewLogic.sideBySideLayoutXml())
-            layoutId = SIDE_BY_SIDE_LAYOUT_ID
-        else:
-            layoutId = slicer.vtkMRMLLayoutNode.SlicerLayoutOneUpRedSliceView
-        if layoutManager.layout != layoutId:
-            layoutManager.setLayout(layoutId)
+        if not layoutNode.IsLayoutDescription(REVIEW_LAYOUT_ID):
+            layoutNode.AddLayoutDescription(REVIEW_LAYOUT_ID, DataReviewLogic.reviewLayoutXml())
+        if layoutManager.layout != REVIEW_LAYOUT_ID:
+            layoutManager.setLayout(REVIEW_LAYOUT_ID)
 
     # ---- Scene handling --------------------------------------------------------------------------
 
@@ -435,11 +441,12 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
         self.imageNodes = {}
         self.segmentationNode = None
 
-    def loadCase(self, index, fitToViews=False, showSegmentation=True, fillOpacity=0.5):
+    def loadCase(self, index, fitToViews=False, showSegmentation=True, fillOpacity=0.5, foregroundOpacity=0.0):
         """Load all image channels and the segmentation of a case, replacing the previous case.
 
-        Channels are shown one per view (first channel in the Red view, second in the Yellow view) in
-        linked axial views; the segmentation is overlaid on all views.
+        The first channel becomes the background and the second the foreground layer of every slice
+        view, so the view controller opacity slider switches between them; the segmentation is overlaid
+        on all views.
 
         Returns (imageNodes dict, segmentationNode); segmentationNode may be None.
         Raises if no image file of the case exists; missing single files are logged as warnings.
@@ -470,36 +477,57 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
             else:
                 logging.warning(f"DataReview: segmentation not found for case '{case['id']}': {segmentationPath}")
 
-        self.showInViews(channels, fitToViews)
+        self.showInViews(channels, fitToViews, foregroundOpacity)
         self.currentIndex = index
         return self.imageNodes, self.segmentationNode
 
-    def showInViews(self, channels, fitToViews):
-        self.applyLayout(len(channels))
+    def showInViews(self, channels, fitToViews, foregroundOpacity=None):
+        """Put the first channel in the background and the second in the foreground layer of all views."""
+        self.applyLayout()
         layoutManager = slicer.app.layoutManager()
         if layoutManager is None:
             return
-        viewNames = SIDE_BY_SIDE_VIEWS if len(channels) >= 2 else SIDE_BY_SIDE_VIEWS[:1]
-        for viewName, channel in zip(viewNames, channels):
+        loaded = [ch for ch in channels if ch in self.imageNodes]
+        backgroundNode = self.imageNodes[loaded[0]] if loaded else None
+        foregroundNode = self.imageNodes[loaded[1]] if len(loaded) > 1 else None
+        for viewName, orientation in REVIEW_VIEWS.items():
             sliceWidget = layoutManager.sliceWidget(viewName)
             if sliceWidget is None:
                 continue
-            node = self.imageNodes.get(channel)
             sliceNode = sliceWidget.mrmlSliceNode()
-            sliceNode.SetOrientationToAxial()
-            sliceNode.SetLayoutLabel(channel)
+            sliceNode.SetOrientation(orientation)
             compositeNode = sliceWidget.mrmlSliceCompositeNode()
-            compositeNode.SetBackgroundVolumeID(node.GetID() if node else None)
-            compositeNode.SetForegroundVolumeID(None)
+            compositeNode.SetBackgroundVolumeID(backgroundNode.GetID() if backgroundNode else None)
+            compositeNode.SetForegroundVolumeID(foregroundNode.GetID() if foregroundNode else None)
             compositeNode.SetLabelVolumeID(None)
-            # "Lock" the views together: scrolling / zooming one view moves the other one as well.
+            if foregroundOpacity is not None:
+                compositeNode.SetForegroundOpacity(foregroundOpacity)
+            # Lock the views together: scrolling, zooming or changing layers/opacity in one view
+            # is applied to the others as well.
             compositeNode.SetLinkedControl(True)
             compositeNode.SetHotLinkedControl(True)
         if fitToViews:
-            for viewName in viewNames:
+            for viewName in REVIEW_VIEWS:
                 sliceWidget = layoutManager.sliceWidget(viewName)
                 if sliceWidget is not None:
                     sliceWidget.sliceLogic().FitSliceToAll()
+
+    def setForegroundOpacity(self, opacity):
+        """0 shows only the first channel (background), 1 only the second channel (foreground)."""
+        layoutManager = slicer.app.layoutManager()
+        if layoutManager is None:
+            return
+        for viewName in REVIEW_VIEWS:
+            sliceWidget = layoutManager.sliceWidget(viewName)
+            if sliceWidget is not None:
+                sliceWidget.mrmlSliceCompositeNode().SetForegroundOpacity(opacity)
+
+    def foregroundOpacity(self):
+        layoutManager = slicer.app.layoutManager()
+        if layoutManager is None:
+            return 0.0
+        sliceWidget = layoutManager.sliceWidget("Red")
+        return sliceWidget.mrmlSliceCompositeNode().GetForegroundOpacity() if sliceWidget else 0.0
 
     def setSegmentationVisible(self, visible):
         if self.segmentationNode and self.segmentationNode.GetDisplayNode():
@@ -590,6 +618,7 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.removeDecisionButton.connect("clicked(bool)", lambda: self.onDecision(STATUS_PENDING))
         self.ui.commentTextEdit.connect("textChanged()", self.onCommentTextChanged)
         self.ui.showSegmentationCheckBox.connect("toggled(bool)", self.logic.setSegmentationVisible)
+        self.ui.blendSliderWidget.connect("valueChanged(double)", self.onBlendChanged)
         self.ui.resetViewsButton.connect("clicked(bool)", self.onResetViews)
 
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
@@ -679,6 +708,7 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             ("Left", self.onPrevious),
             ("U", self.onNextPending),
             ("S", lambda: self.ui.showSegmentationCheckBox.setChecked(not self.ui.showSegmentationCheckBox.checked)),
+            ("T", self.toggleChannel),
         ]
         for key, callback in bindings:
             shortcut = qt.QShortcut(mainWindow)
@@ -768,6 +798,7 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
     def afterManifestLoaded(self):
         self._viewsFittedOnce = False
+        self.updateBlendLabels()
         self.populateCaseList()
         if self.logic.caseCount() == 0:
             self.updateGUI()
@@ -807,7 +838,8 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         fit = (not self.ui.keepSlicePositionsCheckBox.checked) or (not self._viewsFittedOnce)
         try:
             with slicer.util.tryWithErrorDisplay(_("Failed to load case."), waitCursor=True):
-                self.logic.loadCase(index, fitToViews=fit, showSegmentation=self.ui.showSegmentationCheckBox.checked)
+                self.logic.loadCase(index, fitToViews=fit, showSegmentation=self.ui.showSegmentationCheckBox.checked,
+                                    foregroundOpacity=self.ui.blendSliderWidget.value)
                 self._viewsFittedOnce = True
         finally:
             self.updateGUI()
@@ -815,7 +847,22 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
     def onResetViews(self):
         if self.logic.imageNodes:
             channels = [ch for ch in self.logic.channels if ch in self.logic.imageNodes] or list(self.logic.imageNodes)
-            self.logic.showInViews(channels, fitToViews=True)
+            self.logic.showInViews(channels, fitToViews=True, foregroundOpacity=self.ui.blendSliderWidget.value)
+
+    def onBlendChanged(self, value):
+        if not self._updatingGUI:
+            self.logic.setForegroundOpacity(value)
+
+    def toggleChannel(self):
+        """Jump between the two channels (foreground opacity 0 <-> 1)."""
+        self.ui.blendSliderWidget.value = 0.0 if self.ui.blendSliderWidget.value > 0.5 else 1.0
+
+    def updateBlendLabels(self):
+        channels = self.logic.channels
+        first = channels[0] if channels else _("Image 1")
+        second = channels[1] if len(channels) > 1 else _("Image 2")
+        self.ui.blendLabel.text = f"{first} \u25c0 \u25b6 {second}:"
+        self.ui.blendSliderWidget.toolTip = _("0 shows only {first}, 1 shows only {second}. Same as the opacity slider in the view controllers. Shortcut: T").format(first=first, second=second)
 
     # ---- Decisions and comments ------------------------------------------------------------------
 
@@ -911,6 +958,8 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self.ui.rejectReasonLabel.hide()
             self.ui.commentTextEdit.setStyleSheet("")
             self.ui.showSegmentationCheckBox.checked = self.logic.segmentationVisible()
+            if hasCase:
+                self.ui.blendSliderWidget.value = self.logic.foregroundOpacity()
 
             if not hasManifest:
                 self.ui.progressLabel.text = _("No manifest loaded.")
@@ -1021,13 +1070,17 @@ class DataReviewTest(ScriptedLoadableModuleTest):
         self.assertEqual(logic.currentIndex, 0)
         layoutManager = slicer.app.layoutManager()
         if layoutManager is not None:
-            self.assertEqual(layoutManager.layout, SIDE_BY_SIDE_LAYOUT_ID)
-            red = layoutManager.sliceWidget("Red").mrmlSliceCompositeNode()
-            yellow = layoutManager.sliceWidget("Yellow").mrmlSliceCompositeNode()
-            self.assertEqual(red.GetBackgroundVolumeID(), imageNodes["ADC"].GetID())
-            self.assertEqual(yellow.GetBackgroundVolumeID(), imageNodes["TRACEW"].GetID())
-            self.assertTrue(red.GetLinkedControl() and yellow.GetLinkedControl())
-            self.assertEqual(layoutManager.sliceWidget("Yellow").mrmlSliceNode().GetOrientation(), "Axial")
+            self.assertEqual(layoutManager.layout, REVIEW_LAYOUT_ID)
+            for viewName, orientation in REVIEW_VIEWS.items():
+                sliceWidget = layoutManager.sliceWidget(viewName)
+                composite = sliceWidget.mrmlSliceCompositeNode()
+                self.assertEqual(composite.GetBackgroundVolumeID(), imageNodes["ADC"].GetID())
+                self.assertEqual(composite.GetForegroundVolumeID(), imageNodes["TRACEW"].GetID())
+                self.assertTrue(composite.GetLinkedControl())
+                self.assertEqual(sliceWidget.mrmlSliceNode().GetOrientation(), orientation)
+            logic.setForegroundOpacity(1.0)
+            self.assertEqual(logic.foregroundOpacity(), 1.0)
+            self.assertEqual(layoutManager.sliceWidget("Green").mrmlSliceCompositeNode().GetForegroundOpacity(), 1.0)
 
         logic.loadCase(1)
         self.assertEqual(len(slicer.util.getNodesByClass("vtkMRMLScalarVolumeNode")), 2, "previous case should be removed")
