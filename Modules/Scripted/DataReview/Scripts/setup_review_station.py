@@ -30,8 +30,10 @@ def main():
     args = parser.parse_args(sys.argv[1:])
 
     moduleDir = os.path.dirname(os.path.dirname(os.path.abspath(sys.argv[0])))  # Scripts/ -> module folder
-    revisionSettings = slicer.app.revisionUserSettings()  # Modules/* settings live in the revision-specific file
-    settings = qt.QSettings()
+    # Slicer keeps "Modules/AdditionalPaths" in the revision-specific settings file, but the home module and
+    # everything else in the regular user settings file.
+    revisionSettings = slicer.app.revisionUserSettings()
+    settings = slicer.app.userSettings()
 
     additionalPaths = list(revisionSettings.value("Modules/AdditionalPaths") or [])
     if isinstance(additionalPaths, str):
@@ -40,9 +42,11 @@ def main():
     if args.reset:
         additionalPaths = [p for p in additionalPaths if os.path.normpath(p) != os.path.normpath(moduleDir)]
         revisionSettings.setValue("Modules/AdditionalPaths", additionalPaths)
-        revisionSettings.setValue("Modules/HomeModule", "Welcome")
-        for key in ("DataReview/autoLoadManifest", "DataReview/simplifiedUI"):
-            settings.remove(key)
+        settings.setValue("Modules/HomeModule", "Welcome")
+        for key in ("DataReview/autoLoadManifest", "DataReview/simplifiedUI", "MainWindow/windowState"):
+            settings.remove(key)  # dropping windowState brings back any toolbars hidden by the simplified interface
+        revisionSettings.sync()
+        settings.sync()
         print("Data Review startup settings removed.")
         slicer.util.exit(0)
 
@@ -56,7 +60,8 @@ def main():
     if os.path.normpath(moduleDir) not in [os.path.normpath(p) for p in additionalPaths]:
         additionalPaths.append(moduleDir)
     revisionSettings.setValue("Modules/AdditionalPaths", additionalPaths)
-    revisionSettings.setValue("Modules/HomeModule", "DataReview")
+    settings.setValue("Modules/HomeModule", "DataReview")
+    settings.remove("MainWindow/windowState")  # start from the default window layout (all toolbars visible)
     settings.setValue("DataReview/autoLoadManifest", manifestPath)
     settings.setValue("DataReview/simplifiedUI", not args.full_ui)
     if args.reviewer is not None:

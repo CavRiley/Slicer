@@ -158,6 +158,19 @@ without edits. Practical notes:
 - Reviewer name, startup manifest, interface mode and glob patterns are Slicer settings on each
   machine, not part of the manifest. Re-run the setup script on each new machine.
 
+## Troubleshooting
+
+- **Slicer starts without toolbars or a module selector.** Slicer saves the window layout on exit.
+  Current versions of the module restore the toolbars before that happens, but if it occurs, open Data
+  Review and press `Ctrl+Shift+U`, or run the setup script with `--reset`, or delete the
+  `windowState` line under `[MainWindow]` in `Slicer.ini` (shown by `Slicer --settings-path`).
+- **`Error #1 while writing setting "Modules/AdditionalPaths"` on the first run.** The installed Slicer
+  keeps its revision-specific settings next to the application; the warning appears once while that
+  folder is being created and is harmless. Running the setup script a second time shows no warning.
+- **Slicer opens in the Welcome module instead of Data Review.** Re-run the setup script; the home
+  module is stored in Slicer's user settings file, which is also where *Edit → Application Settings →
+  Modules → Default startup module* writes it.
+
 ## Summarizing results
 
 ```python

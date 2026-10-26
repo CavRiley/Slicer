@@ -544,6 +544,26 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
 #
 
 
+class _MainWindowCloseFilter(qt.QObject):
+    """Restores the full interface right before the main window closes.
+
+    Slicer saves the main window state (including which toolbars are hidden) when it closes and
+    restores it at the next start. Without this, a session that ran with the simplified interface
+    would leave the next regular Slicer session without any toolbars or module selector.
+    """
+
+    def __init__(self, widget, parent=None):
+        qt.QObject.__init__(self, parent)
+        self.widget = widget
+
+    def eventFilter(self, obj, event):
+        if event.type() == qt.QEvent.Close and self.widget._simplifiedUIActive:
+            self.widget.setSimplifiedUI(False)
+            # If the close gets cancelled (e.g. "do you want to exit?"), re-apply the simplified interface.
+            qt.QTimer.singleShot(0, self.widget._reapplySimplifiedUIIfStillOpen)
+        return False
+
+
 class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
     """Uses ScriptedLoadableModuleWidget base class, available at:
     https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
@@ -569,6 +589,7 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self._viewsFittedOnce = False
         self._autoLoadAttempted = False
         self._simplifiedUIActive = False
+        self._closeFilter = None
 
     def setup(self):
         ScriptedLoadableModuleWidget.setup(self)
@@ -623,11 +644,20 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
 
+        mainWindow = slicer.util.mainWindow()
+        if mainWindow is not None:
+            self._closeFilter = _MainWindowCloseFilter(self, mainWindow)
+            mainWindow.installEventFilter(self._closeFilter)
+
         self.updateGUI()
 
     def cleanup(self):
         self.removeObservers()
         self.removeShortcuts()
+        mainWindow = slicer.util.mainWindow()
+        if self._closeFilter is not None and mainWindow is not None:
+            mainWindow.removeEventFilter(self._closeFilter)
+        self._closeFilter = None
 
     def enter(self):
         self.installShortcuts()
@@ -677,6 +707,11 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
     def toggleSimplifiedUI(self):
         self.setSimplifiedUI(not self._simplifiedUIActive)
+
+    def _reapplySimplifiedUIIfStillOpen(self):
+        mainWindow = slicer.util.mainWindow()
+        if mainWindow is not None and mainWindow.isVisible() and _settingBool(SETTING_SIMPLIFIED_UI):
+            self.setSimplifiedUI(True)
 
     def onSimplifiedUIToggled(self, checked):
         qt.QSettings().setValue(SETTING_SIMPLIFIED_UI, checked)
