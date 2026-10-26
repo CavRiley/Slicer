@@ -13,7 +13,26 @@ reviewer then only starts Slicer and presses buttons.
 ## Setting up a review machine
 
 You need: an installed Slicer (tested with 5.12.3, no source build required), this module folder
-(`Modules/Scripted/DataReview`), and the dataset folder.
+(`Modules/Scripted/DataReview`), and the dataset folder with its `review_manifest.json`.
+
+### Quick way (macOS / Linux)
+
+Copy the dataset folder onto the machine, then run from a terminal:
+
+```
+curl -fsSL https://raw.githubusercontent.com/CavRiley/Slicer/data-review-module/Modules/Scripted/DataReview/Scripts/install_review_station.sh \
+  | bash -s -- --manifest /path/to/dataset/review_manifest.json --reviewer "JD"
+```
+
+This fetches only the module folder from the repository into `~/DataReview` (a sparse git clone, about
+1 MB), finds the installed Slicer, and runs the setup described below. Add `--install-slicer` on macOS
+to download the latest stable Slicer into `/Applications` if none is installed, `--full-ui` to keep
+Slicer's menus and toolbars, `--reset` to undo the setup, and `--dest DIR` to keep the checkout
+elsewhere. Running it again later updates the module with `git pull`. Run `bash install_review_station.sh --help`
+for all options. If the dataset has no manifest yet, run the script with `--skip-setup`, create the manifest
+in Slicer (step 2 below), then run the script again with `--manifest`.
+
+### Step by step
 
 1. **Copy** the `DataReview` folder and the dataset folder onto the machine.
 2. **Create the manifest** once (skip if the dataset folder already contains `review_manifest.json`):
@@ -169,6 +188,11 @@ without edits. Practical notes:
   its revision-specific settings in a `slicer.org` folder next to the application and prints this
   warning on every start. It is harmless: the values are still written (check with `Slicer --settings-path`
   for the user file; the revision file is `Slicer-<revision>.ini` in that folder).
+- **The setup script prints `WARNING: could not save the module path`.** Slicer keeps the module
+  path list inside its application folder. On macOS a terminal without the *App Management* privacy
+  permission cannot write there. Either grant it (System Settings → Privacy & Security → App
+  Management), or add the printed folder by hand in Slicer under *Edit → Application Settings →
+  Modules → Additional module paths* and restart. Everything else the script sets is already in place.
 - **Slicer opens in the Welcome module instead of Data Review.** Re-run the setup script; the home
   module is stored in Slicer's user settings file, which is also where *Edit → Application Settings →
   Modules → Default startup module* writes it.

@@ -49,6 +49,7 @@ def main():
         settings.sync()
         print("Data Review startup settings removed.")
         slicer.util.exit(0)
+        return
 
     if not args.manifest:
         parser.error("--manifest is required (or use --reset)")
@@ -56,6 +57,7 @@ def main():
     if not os.path.isfile(manifestPath):
         print(f"ERROR: manifest not found: {manifestPath}")
         slicer.util.exit(1)
+        return
 
     if os.path.normpath(moduleDir) not in [os.path.normpath(p) for p in additionalPaths]:
         additionalPaths.append(moduleDir)
@@ -68,6 +70,24 @@ def main():
         settings.setValue("DataReview/reviewer", args.reviewer)
     revisionSettings.sync()
     settings.sync()
+
+    # Verify that the module path really reached the revision settings file. Slicer keeps that file next to
+    # the application; on macOS a shell without "App Management" permission cannot write inside the bundle.
+    # (Read the file directly: QSettings objects in the same process share a cache and would not notice.)
+    savedText = ""
+    try:
+        with open(revisionSettings.fileName(), encoding="utf-8") as f:
+            savedText = f.read()
+    except OSError:
+        pass
+    if moduleDir not in savedText:
+        print("WARNING: could not save the module path to", revisionSettings.fileName())
+        print("         Add it by hand in Slicer: Edit > Application Settings > Modules > Additional module paths:")
+        print("         " + moduleDir)
+        print("         (On macOS, running this script from a terminal that has 'App Management' permission,")
+        print("         or from Slicer's own Python console, also works.)")
+        slicer.util.exit(3)
+        return
 
     print("Data Review station configured:")
     print(f"  module folder : {moduleDir}")
