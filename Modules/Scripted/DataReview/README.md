@@ -32,6 +32,22 @@ elsewhere. Running it again later updates the module with `git pull`. Run `bash 
 for all options. If the dataset has no manifest yet, run the script with `--skip-setup`, create the manifest
 in Slicer (step 2 below), then run the script again with `--manifest`.
 
+### Quick way (Windows)
+
+Copy the dataset folder onto the machine, install [git for Windows](https://git-scm.com/download/win)
+if it is missing, then run in PowerShell:
+
+```
+powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/CavRiley/Slicer/data-review-module/Modules/Scripted/DataReview/Scripts/install_review_station.ps1))) -Manifest 'D:\dataset\review_manifest.json' -Reviewer 'JD'"
+```
+
+It does the same as the macOS/Linux script: sparse clone into `%USERPROFILE%\DataReview`, Slicer
+detection (per-user installs under `%LOCALAPPDATA%\slicer.org` and `Program Files`), and the setup.
+Options mirror the shell script: `-InstallSlicer` downloads and silently installs the latest stable
+Slicer if none is found, `-FullUI`, `-SkipSetup`, `-Reset`, `-Dest`, `-Slicer 'C:\path\Slicer.exe'`.
+Slicer's own messages go to its log file rather than the console on Windows; the script reports the
+outcome from Slicer's exit code.
+
 ### Step by step
 
 1. **Copy** the `DataReview` folder and the dataset folder onto the machine.

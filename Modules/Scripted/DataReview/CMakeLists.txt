@@ -11,6 +11,7 @@ set(MODULE_PYTHON_RESOURCES
   Resources/UI/${MODULE_NAME}.ui
   Scripts/setup_review_station.py
   Scripts/install_review_station.sh
+  Scripts/install_review_station.ps1
   )
 
 #-----------------------------------------------------------------------------
