@@ -164,9 +164,10 @@ without edits. Practical notes:
   Current versions of the module restore the toolbars before that happens, but if it occurs, open Data
   Review and press `Ctrl+Shift+U`, or run the setup script with `--reset`, or delete the
   `windowState` line under `[MainWindow]` in `Slicer.ini` (shown by `Slicer --settings-path`).
-- **`Error #1 while writing setting "Modules/AdditionalPaths"` on the first run.** The installed Slicer
-  keeps its revision-specific settings next to the application; the warning appears once while that
-  folder is being created and is harmless. Running the setup script a second time shows no warning.
+- **`Error #1 while writing setting "Modules/AdditionalPaths"` at startup.** The installed Slicer keeps
+  its revision-specific settings in a `slicer.org` folder next to the application and prints this
+  warning on every start. It is harmless: the values are still written (check with `Slicer --settings-path`
+  for the user file; the revision file is `Slicer-<revision>.ini` in that folder).
 - **Slicer opens in the Welcome module instead of Data Review.** Re-run the setup script; the home
   module is stored in Slicer's user settings file, which is also where *Edit → Application Settings →
   Modules → Default startup module* writes it.
