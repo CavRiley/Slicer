@@ -209,15 +209,16 @@
          </widget>
         </item>
         <item>
-         <widget class="QCheckBox" name="showSegmentationCheckBox">
+         <widget class="QLabel" name="lesionModeLabel">
           <property name="text">
-           <string>Show segmentation</string>
+           <string>Lesion:</string>
           </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="lesionModeComboBox">
           <property name="toolTip">
-           <string>Shortcut: S</string>
-          </property>
-          <property name="checked">
-           <bool>true</bool>
+           <string>How the lesion segmentation is drawn: filled, outline only, or hidden. Shortcut: S cycles through them.</string>
           </property>
          </widget>
         </item>
@@ -236,7 +237,7 @@
       <item>
        <widget class="QLabel" name="shortcutsLabel">
         <property name="text">
-         <string>&lt;small&gt;Keys: &lt;b&gt;A&lt;/b&gt; accept, &lt;b&gt;R&lt;/b&gt; reject, &lt;b&gt;→&lt;/b&gt;/&lt;b&gt;←&lt;/b&gt; next/previous, &lt;b&gt;U&lt;/b&gt; next unreviewed, &lt;b&gt;S&lt;/b&gt; show/hide segmentation, &lt;b&gt;T&lt;/b&gt; switch ADC/TRACEW&lt;/small&gt;</string>
+         <string>&lt;small&gt;Keys: &lt;b&gt;A&lt;/b&gt; accept, &lt;b&gt;R&lt;/b&gt; reject, &lt;b&gt;→&lt;/b&gt;/&lt;b&gt;←&lt;/b&gt; next/previous, &lt;b&gt;U&lt;/b&gt; next unreviewed, &lt;b&gt;S&lt;/b&gt; lesion filled/outline/hidden, &lt;b&gt;T&lt;/b&gt; switch ADC/TRACEW&lt;/small&gt;</string>
         </property>
         <property name="wordWrap">
          <bool>true</bool>

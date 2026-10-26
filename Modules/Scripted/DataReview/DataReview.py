@@ -44,7 +44,7 @@ axial, sagittal and coronal and are linked, and the segmentation is overlaid on 
 
 <p>Keyboard shortcuts (active while this module is open): <b>A</b> accept, <b>R</b> reject,
 <b>N</b>/<b>Right</b> next, <b>P</b>/<b>Left</b> previous, <b>U</b> next unreviewed,
-<b>S</b> toggle segmentation visibility, <b>T</b> switch between ADC and TRACEW,
+<b>S</b> cycle the lesion display (filled, outline only, hidden), <b>T</b> switch between ADC and TRACEW,
 <b>Ctrl+Shift+U</b> toggle the simplified interface.</p>
 """)
         self.parent.acknowledgementText = _("""
@@ -77,6 +77,12 @@ PAIRING_SUFFIXES = ("_adc", "-adc", "_tracew", "-tracew", "_trace", "-trace", "_
 # File stems that carry no case information at all (e.g. sub-001/adc.nii.gz); the folder name is used instead.
 GENERIC_STEMS = {"adc", "tracew", "trace", "dwi", "b1000", "seg", "segmentation", "label", "labels", "mask",
                  "lesion", "gt", "image", "img", ""}
+
+# Lesion display modes, in the order the S key cycles through them.
+LESION_FILLED = "filled"
+LESION_OUTLINE = "outline"
+LESION_HIDDEN = "hidden"
+LESION_MODES = (LESION_FILLED, LESION_OUTLINE, LESION_HIDDEN)
 
 SETTINGS_PREFIX = "DataReview/"
 SETTING_AUTOLOAD = SETTINGS_PREFIX + "autoLoadManifest"
@@ -441,7 +447,7 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
         self.imageNodes = {}
         self.segmentationNode = None
 
-    def loadCase(self, index, fitToViews=False, showSegmentation=True, fillOpacity=0.5, foregroundOpacity=0.0):
+    def loadCase(self, index, fitToViews=False, lesionMode=LESION_FILLED, fillOpacity=0.5, foregroundOpacity=0.0):
         """Load all image channels and the segmentation of a case, replacing the previous case.
 
         The first channel becomes the background and the second the foreground layer of every slice
@@ -472,8 +478,8 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
                 self.segmentationNode.SetReferenceImageGeometryParameterFromVolumeNode(referenceNode)
                 displayNode = self.segmentationNode.GetDisplayNode()
                 if displayNode:
-                    displayNode.SetVisibility(showSegmentation)
                     displayNode.SetOpacity2DFill(fillOpacity)
+                self.setLesionMode(lesionMode)
             else:
                 logging.warning(f"DataReview: segmentation not found for case '{case['id']}': {segmentationPath}")
 
@@ -529,14 +535,26 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
         sliceWidget = layoutManager.sliceWidget("Red")
         return sliceWidget.mrmlSliceCompositeNode().GetForegroundOpacity() if sliceWidget else 0.0
 
-    def setSegmentationVisible(self, visible):
-        if self.segmentationNode and self.segmentationNode.GetDisplayNode():
-            self.segmentationNode.GetDisplayNode().SetVisibility(visible)
+    def setLesionMode(self, mode):
+        """Show the lesion filled, as an outline only, or not at all."""
+        if mode not in LESION_MODES:
+            raise ValueError(f"Unknown lesion display mode '{mode}'")
+        if not self.segmentationNode or not self.segmentationNode.GetDisplayNode():
+            return
+        displayNode = self.segmentationNode.GetDisplayNode()
+        displayNode.SetVisibility(mode != LESION_HIDDEN)
+        displayNode.SetVisibility2DFill(mode == LESION_FILLED)
+        displayNode.SetVisibility2DOutline(mode != LESION_HIDDEN)
+        if mode == LESION_OUTLINE:
+            displayNode.SetOpacity2DOutline(1.0)
 
-    def segmentationVisible(self):
-        if self.segmentationNode and self.segmentationNode.GetDisplayNode():
-            return bool(self.segmentationNode.GetDisplayNode().GetVisibility())
-        return True
+    def lesionMode(self):
+        if not self.segmentationNode or not self.segmentationNode.GetDisplayNode():
+            return None
+        displayNode = self.segmentationNode.GetDisplayNode()
+        if not displayNode.GetVisibility():
+            return LESION_HIDDEN
+        return LESION_FILLED if displayNode.GetVisibility2DFill() else LESION_OUTLINE
 
 
 #
@@ -638,7 +656,9 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.rejectButton.connect("clicked(bool)", lambda: self.onDecision(STATUS_REJECTED))
         self.ui.removeDecisionButton.connect("clicked(bool)", lambda: self.onDecision(STATUS_PENDING))
         self.ui.commentTextEdit.connect("textChanged()", self.onCommentTextChanged)
-        self.ui.showSegmentationCheckBox.connect("toggled(bool)", self.logic.setSegmentationVisible)
+        for mode, label in ((LESION_FILLED, _("Filled")), (LESION_OUTLINE, _("Outline only")), (LESION_HIDDEN, _("Hidden"))):
+            self.ui.lesionModeComboBox.addItem(label, mode)
+        self.ui.lesionModeComboBox.connect("currentIndexChanged(int)", self.onLesionModeChanged)
         self.ui.blendSliderWidget.connect("valueChanged(double)", self.onBlendChanged)
         self.ui.resetViewsButton.connect("clicked(bool)", self.onResetViews)
 
@@ -742,7 +762,7 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             ("P", self.onPrevious),
             ("Left", self.onPrevious),
             ("U", self.onNextPending),
-            ("S", lambda: self.ui.showSegmentationCheckBox.setChecked(not self.ui.showSegmentationCheckBox.checked)),
+            ("S", self.cycleLesionMode),
             ("T", self.toggleChannel),
         ]
         for key, callback in bindings:
@@ -873,7 +893,7 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         fit = (not self.ui.keepSlicePositionsCheckBox.checked) or (not self._viewsFittedOnce)
         try:
             with slicer.util.tryWithErrorDisplay(_("Failed to load case."), waitCursor=True):
-                self.logic.loadCase(index, fitToViews=fit, showSegmentation=self.ui.showSegmentationCheckBox.checked,
+                self.logic.loadCase(index, fitToViews=fit, lesionMode=self.currentLesionMode(),
                                     foregroundOpacity=self.ui.blendSliderWidget.value)
                 self._viewsFittedOnce = True
         finally:
@@ -883,6 +903,21 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         if self.logic.imageNodes:
             channels = [ch for ch in self.logic.channels if ch in self.logic.imageNodes] or list(self.logic.imageNodes)
             self.logic.showInViews(channels, fitToViews=True, foregroundOpacity=self.ui.blendSliderWidget.value)
+
+    def currentLesionMode(self):
+        mode = self.ui.lesionModeComboBox.currentData
+        return mode if mode in LESION_MODES else LESION_FILLED
+
+    def setLesionModeInGUI(self, mode):
+        self.ui.lesionModeComboBox.currentIndex = self.ui.lesionModeComboBox.findData(mode)
+
+    def onLesionModeChanged(self, index):
+        if not self._updatingGUI:
+            self.logic.setLesionMode(self.currentLesionMode())
+
+    def cycleLesionMode(self):
+        current = LESION_MODES.index(self.currentLesionMode())
+        self.setLesionModeInGUI(LESION_MODES[(current + 1) % len(LESION_MODES)])
 
     def onBlendChanged(self, value):
         if not self._updatingGUI:
@@ -992,7 +1027,6 @@ class DataReviewWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 widget.enabled = hasCase
             self.ui.rejectReasonLabel.hide()
             self.ui.commentTextEdit.setStyleSheet("")
-            self.ui.showSegmentationCheckBox.checked = self.logic.segmentationVisible()
             if hasCase:
                 self.ui.blendSliderWidget.value = self.logic.foregroundOpacity()
 
@@ -1117,7 +1151,20 @@ class DataReviewTest(ScriptedLoadableModuleTest):
             self.assertEqual(logic.foregroundOpacity(), 1.0)
             self.assertEqual(layoutManager.sliceWidget("Green").mrmlSliceCompositeNode().GetForegroundOpacity(), 1.0)
 
-        logic.loadCase(1)
+        self.delayDisplay("Lesion display modes")
+        displayNode = segmentationNode.GetDisplayNode()
+        self.assertEqual(logic.lesionMode(), LESION_FILLED)
+        logic.setLesionMode(LESION_OUTLINE)
+        self.assertTrue(displayNode.GetVisibility() and displayNode.GetVisibility2DOutline() and not displayNode.GetVisibility2DFill())
+        self.assertEqual(logic.lesionMode(), LESION_OUTLINE)
+        logic.setLesionMode(LESION_HIDDEN)
+        self.assertFalse(displayNode.GetVisibility())
+        self.assertEqual(logic.lesionMode(), LESION_HIDDEN)
+        _, seg2 = logic.loadCase(1, lesionMode=LESION_OUTLINE)
+        self.assertEqual(logic.lesionMode(), LESION_OUTLINE)
+        with self.assertRaises(ValueError):
+            logic.setLesionMode("sparkly")
+
         self.assertEqual(len(slicer.util.getNodesByClass("vtkMRMLScalarVolumeNode")), 2, "previous case should be removed")
         self.assertEqual(len(slicer.util.getNodesByClass("vtkMRMLSegmentationNode")), 1)
 

@@ -94,7 +94,8 @@ the navigation buttons.
 - Both images are in every view: ADC as the background layer, TRACEW as the foreground layer. The
   *ADC ◀ ▶ TRACEW* slider in the panel (or the opacity slider in any view controller, or the `T` key)
   blends between them: 0 shows only ADC, 1 shows only TRACEW. The segmentation is overlaid on top.
-- *Show segmentation* and *Reset views* are below the navigation buttons.
+- The *Lesion* box switches the segmentation between **Filled**, **Outline only** and **Hidden**; the
+  `S` key cycles through the three. *Reset views* re-centres all views on the current images.
 
 | Key | Action |
 | --- | --- |
@@ -103,7 +104,7 @@ the navigation buttons.
 | `N` / `→` | Next case |
 | `P` / `←` | Previous case |
 | `U` | Next unreviewed case |
-| `S` | Show / hide the segmentation |
+| `S` | Lesion: filled, outline only, hidden |
 | `T` | Switch between ADC and TRACEW |
 | `Ctrl+Shift+U` | Show / hide the full Slicer interface |
 
