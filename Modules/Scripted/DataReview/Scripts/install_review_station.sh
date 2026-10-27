@@ -25,6 +25,7 @@ PATTERN_ARGS=()
 REVIEWER=""
 SLICER_EXE=""
 FULL_UI=""
+ALL_MODULES=""
 SKIP_SETUP=""
 INSTALL_SLICER=""
 RESET=""
@@ -45,6 +46,7 @@ Usage: install_review_station.sh --manifest PATH [options]
   --slicer PATH       Slicer executable (default: auto-detect)
   --install-slicer    macOS only: download the latest stable Slicer into /Applications if none is found
   --full-ui           keep the regular Slicer menus and toolbars
+  --all-modules       load every Slicer module (default: only what Data Review needs, saves memory)
   --skip-setup        only fetch/update the module, do not change Slicer settings
   --reset             remove the Data Review startup settings from Slicer
   -h, --help          this text
@@ -63,6 +65,7 @@ while [[ $# -gt 0 ]]; do
     --slicer) SLICER_EXE="$2"; shift 2 ;;
     --install-slicer) INSTALL_SLICER=1; shift ;;
     --full-ui) FULL_UI=1; shift ;;
+    --all-modules) ALL_MODULES=1; shift ;;
     --skip-setup) SKIP_SETUP=1; shift ;;
     --reset) RESET=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -162,6 +165,7 @@ else
   [[ -n "$DATASET" ]] && args+=(--dataset "$DATASET" ${PATTERN_ARGS[@]+"${PATTERN_ARGS[@]}"})
   [[ -n "$REVIEWER" ]] && args+=(--reviewer "$REVIEWER")
   [[ -n "$FULL_UI" ]] && args+=(--full-ui)
+  [[ -n "$ALL_MODULES" ]] && args+=(--all-modules)
 fi
 echo "==> Configuring Slicer"
 set +e

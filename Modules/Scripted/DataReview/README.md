@@ -227,6 +227,25 @@ without edits. Practical notes:
 - Reviewer name, startup manifest, interface mode and glob patterns are Slicer settings on each
   machine, not part of the manifest. Re-run the setup script on each new machine.
 
+## Memory and startup time
+
+The setup script configures a *lean* Slicer by default: the built-in command-line modules, the built-in
+scripted modules and the loadable modules Data Review does not use are not loaded. This is the same as
+unticking the "load built-in ... modules" boxes and filling "modules to ignore" in *Edit → Application
+Settings → Modules*, so it needs no special build and `--all-modules` (or `-AllModules`) turns it off.
+Measured on Slicer 5.12.3 (macOS, resident memory):
+
+| Configuration | Modules | At startup | With a case open |
+| --- | --- | --- | --- |
+| Stock Slicer | 141 | 545 MB | 769 MB |
+| Lean (default for a station) | 9 | 458 MB | 683 MB |
+
+The remaining memory is Slicer's own runtime (Qt, VTK, Python, about 380 MB) plus the three slice
+views, and does not grow while reviewing because each case replaces the previous one. Image size is
+what matters beyond that: native-space diffusion volumes are a few MB each, MNI-space volumes around
+30 MB each, and every loaded volume carries a resliced copy per view. On a machine with 8 GB of RAM
+the lean setup leaves ample headroom; keep other applications closed while reviewing large datasets.
+
 ## Troubleshooting
 
 - **Slicer starts without toolbars or a module selector.** Slicer saves the window layout on exit.

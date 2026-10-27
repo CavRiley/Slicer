@@ -33,6 +33,8 @@
   Download the latest stable Slicer and install it silently if none is found.
 .PARAMETER FullUI
   Keep the regular Slicer menus and toolbars.
+.PARAMETER AllModules
+  Load every Slicer module. By default only the modules Data Review needs are loaded (less memory, faster start).
 .PARAMETER SkipSetup
   Only fetch/update the module, do not change Slicer settings.
 .PARAMETER Reset
@@ -52,6 +54,7 @@ param(
   [string]$Slicer = "",
   [switch]$InstallSlicer,
   [switch]$FullUI,
+  [switch]$AllModules,
   [switch]$SkipSetup,
   [switch]$Reset
 )
@@ -159,6 +162,7 @@ if ($Reset) {
   if ($SegPattern) { $setupArgs += @("--seg-pattern", "`"$SegPattern`"") }
   if ($Reviewer) { $setupArgs += @("--reviewer", "`"$Reviewer`"") }
   if ($FullUI) { $setupArgs += "--full-ui" }
+  if ($AllModules) { $setupArgs += "--all-modules" }
 }
 Write-Host "==> Configuring Slicer (its output goes to the Slicer log, not to this window)"
 # Slicer.exe is a launcher that waits for the application and forwards its exit code.

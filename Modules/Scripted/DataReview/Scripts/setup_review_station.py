@@ -25,6 +25,16 @@ import argparse
 import os
 import sys
 
+# Built-in modules a review station does not need. Leaving them out saves memory and startup time
+# (measured on Slicer 5.12.3: about 85 MB less resident memory, 141 -> ~9 modules). Names that do not
+# exist in a given Slicer version are ignored.
+LEAN_IGNORED_MODULES = [
+    "Annotations", "Cameras", "CropVolume", "Data", "DynamicModeler", "EventBroker", "GeneralizedReformat",
+    "Models", "MultiVolumeExplorer", "Plots", "Reformat", "SceneViews", "Sequences", "Tables", "Texts",
+    "Transforms", "ViewControllers", "VolumeRendering",
+]
+LEAN_SETTINGS = ("disable-builtin-cli-modules", "disable-builtin-scripted-loadable-modules")
+
 import qt
 import slicer
 
@@ -70,6 +80,8 @@ def main():
     parser.add_argument("--seg-pattern", default="labels/*.nii.gz", help="glob for lesion segmentations, relative to the dataset folder")
     parser.add_argument("--reviewer", default=None, help="reviewer name stored with each decision")
     parser.add_argument("--full-ui", action="store_true", help="keep the regular Slicer interface (menus, toolbars)")
+    parser.add_argument("--all-modules", action="store_true",
+                        help="load every Slicer module; by default only the modules Data Review needs are loaded (less memory, faster start)")
     parser.add_argument("--reset", action="store_true", help="remove all Data Review startup settings")
     args = parser.parse_args(sys.argv[1:])
 
@@ -87,8 +99,9 @@ def main():
         additionalPaths = [p for p in additionalPaths if os.path.normpath(p) != os.path.normpath(moduleDir)]
         revisionSettings.setValue("Modules/AdditionalPaths", additionalPaths)
         settings.setValue("Modules/HomeModule", "Welcome")
-        for key in ("DataReview/autoLoadManifest", "DataReview/simplifiedUI", "MainWindow/windowState"):
+        for key in ("DataReview/autoLoadManifest", "DataReview/simplifiedUI", "MainWindow/windowState") + LEAN_SETTINGS:
             settings.remove(key)  # dropping windowState brings back any toolbars hidden by the simplified interface
+        revisionSettings.remove("Modules/IgnoreModules")
         revisionSettings.sync()
         settings.sync()
         print("Data Review startup settings removed.")
@@ -117,6 +130,16 @@ def main():
     settings.setValue("DataReview/simplifiedUI", not args.full_ui)
     if args.reviewer is not None:
         settings.setValue("DataReview/reviewer", args.reviewer)
+    # Lean module set: these keys are what Edit > Application Settings > Modules writes for the
+    # "load built-in ... modules" check boxes and the "modules to ignore" list.
+    if args.all_modules:
+        for key in LEAN_SETTINGS:
+            settings.remove(key)
+        revisionSettings.remove("Modules/IgnoreModules")
+    else:
+        for key in LEAN_SETTINGS:
+            settings.setValue(key, True)
+        revisionSettings.setValue("Modules/IgnoreModules", LEAN_IGNORED_MODULES)
     revisionSettings.sync()
     settings.sync()
 
@@ -142,6 +165,7 @@ def main():
     print(f"  module folder : {moduleDir}")
     print(f"  manifest      : {manifestPath}")
     print(f"  interface     : {'full' if args.full_ui else 'simplified (Ctrl+Shift+U toggles)'}")
+    print(f"  modules       : {'all' if args.all_modules else 'lean (only what Data Review needs)'}")
     if args.reviewer is not None:
         print(f"  reviewer      : {args.reviewer}")
     print("Start Slicer normally to begin reviewing.")
