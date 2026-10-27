@@ -26,6 +26,9 @@ Version:   $Revision: 1.14 $
 #include <vtkNew.h>
 #include <vtkPointData.h>
 
+// STD includes
+#include <cstring>
+
 //----------------------------------------------------------------------------
 vtkMRMLNodeNewMacro(vtkMRMLScalarVolumeNode);
 vtkCxxSetObjectMacro(vtkMRMLScalarVolumeNode, VoxelValueQuantity, vtkCodedEntry);
@@ -101,6 +104,72 @@ void vtkMRMLScalarVolumeNode::ReadXMLAttributes(const char** atts)
   }
 
   this->EndModify(disabledModify);
+}
+
+//----------------------------------------------------------------------------
+void vtkMRMLScalarVolumeNode::CopyContent(vtkMRMLNode* anode, bool deepCopy /*=true*/)
+{
+  MRMLNodeModifyBlocker blocker(this);
+  Superclass::CopyContent(anode, deepCopy);
+
+  vtkMRMLScalarVolumeNode* node = vtkMRMLScalarVolumeNode::SafeDownCast(anode);
+  if (!node)
+  {
+    return;
+  }
+
+  // Coded entries are owned by the node, so they are always deep-copied
+  if (node->GetVoxelValueQuantity())
+  {
+    vtkNew<vtkCodedEntry> quantity;
+    quantity->Copy(node->GetVoxelValueQuantity());
+    this->SetVoxelValueQuantity(quantity);
+  }
+  else
+  {
+    this->SetVoxelValueQuantity(nullptr);
+  }
+  if (node->GetVoxelValueUnits())
+  {
+    vtkNew<vtkCodedEntry> units;
+    units->Copy(node->GetVoxelValueUnits());
+    this->SetVoxelValueUnits(units);
+  }
+  else
+  {
+    this->SetVoxelValueUnits(nullptr);
+  }
+}
+
+//----------------------------------------------------------------------------
+std::string vtkMRMLScalarVolumeNode::GetVoxelValueQuantityLabel(vtkCodedEntry* quantity)
+{
+  if (!quantity)
+  {
+    return "";
+  }
+  if (quantity->GetCodeMeaning() && strlen(quantity->GetCodeMeaning()) > 0)
+  {
+    return quantity->GetCodeMeaning();
+  }
+  if (quantity->GetCodeValue())
+  {
+    return quantity->GetCodeValue();
+  }
+  return "";
+}
+
+//----------------------------------------------------------------------------
+void vtkMRMLScalarVolumeNode::SetVoxelValueQuantityFromLabel(const std::string& label)
+{
+  if (label.empty())
+  {
+    this->SetVoxelValueQuantity(nullptr);
+    return;
+  }
+  vtkNew<vtkCodedEntry> quantity;
+  quantity->SetValueSchemeMeaning(label, "", label);
+  this->SetVoxelValueQuantity(quantity);
 }
 
 //-----------------------------------------------------------

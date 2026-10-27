@@ -63,6 +63,9 @@ public:
   /// Copy the node's attributes to this object
   void Copy(vtkMRMLNode* node) override;
 
+  /// Set the scene and share its node factory with the internal sequence scene.
+  void SetScene(vtkMRMLScene* scene) override;
+
   /// Copy sequence index information (index name, unit, type, values, etc)
   /// Does not copy data nodes.
   virtual void CopySequenceIndex(vtkMRMLNode* node);
@@ -159,6 +162,14 @@ public:
   /// Update node IDs in case of node ID conflicts on scene import
   void UpdateScene(vtkMRMLScene* scene) override;
 
+  enum
+  {
+    /// Invoked when the content of the sequence is modified: data node is added, replaced, or removed,
+    /// an index value is changed, or the index name, unit, type, or tolerance is changed.
+    /// It is not invoked for changes that do not affect the sequence content (node name, attributes, storage node, etc.).
+    SequenceContentModifiedEvent = 21100
+  };
+
   /// Type of the index. Controls the behavior of sorting, finding, etc.
   /// Additional types may be added in the future, such as tag cloud, two-dimensional index, ...
   enum IndexTypes
@@ -173,6 +184,10 @@ protected:
   ~vtkMRMLSequenceNode() override;
   vtkMRMLSequenceNode(const vtkMRMLSequenceNode&);
   void operator=(const vtkMRMLSequenceNode&);
+
+  /// Marks the content modified (the node has to be written to file again) and invokes
+  /// SequenceContentModifiedEvent. Must be called whenever the content of the sequence is changed.
+  void SequenceContentModified();
 
   /// Get the index where an item would need to be inserted to.
   /// If numeric index then insert it by respecting sorting order, otherwise insert to the end.

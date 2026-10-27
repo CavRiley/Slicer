@@ -25,11 +25,11 @@ endif()
 
 if(NOT Slicer_USE_SYSTEM_${proj})
   set(requirements_file ${CMAKE_BINARY_DIR}/${proj}-requirements.txt)
-  file(WRITE ${requirements_file} [===[
-  # [pip]
-  pip==26.1.1 --hash=sha256:99cb1c2899893b075ff56e4ed0af55669a955b49ad7fb8d8603ecdaf4ed653fb
-  # [/pip]
-  ]===])
+  configure_file(
+    "${CMAKE_CURRENT_LIST_DIR}/Python/python-pip-requirements.txt"
+    "${requirements_file}"
+    COPYONLY
+    )
 
   ExternalProject_Add(${proj}
     ${${proj}_EP_ARGS}
@@ -38,10 +38,16 @@ if(NOT Slicer_USE_SYSTEM_${proj})
     BUILD_IN_SOURCE 1
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
-    INSTALL_COMMAND ${PYTHON_EXECUTABLE} -m pip install --require-hashes -r ${requirements_file}
+    INSTALL_COMMAND ${PYTHON_EXECUTABLE} -m pip install --only-binary=:all: --require-hashes -r ${requirements_file}
     LOG_INSTALL 1
     DEPENDS
       ${${proj}_DEPENDENCIES}
+    )
+
+  ExternalProject_Add_Step(${proj} requirements
+    DEPENDEES build
+    DEPENDERS install
+    DEPENDS "${requirements_file}"
     )
 
   #-----------------------------------------------------------------------------

@@ -16,17 +16,19 @@
 ==============================================================================*/
 
 #include "vtkMRMLAccuratePicker.h"
+#include "vtkMRMLRayCastMapper.h"
 
 // VTK includes
 #include <vtkAbstractCellLocator.h>
 #include <vtkActor.h>
+#include <vtkAssemblyPath.h>
 #include <vtkCellTypes.h>
 #include <vtkDataSet.h>
 #include <vtkMapper.h>
 #include <vtkObjectFactory.h>
 #include <vtkPolyData.h>
-#include <vtkPolyDataMapper.h>
 #include <vtkPropCollection.h>
+#include <vtkTransform.h>
 #include <vtkRenderer.h>
 #include <vtkStaticCellLocator.h>
 #include <vtkUnsignedCharArray.h>
@@ -62,7 +64,7 @@ void vtkMRMLAccuratePicker::UpdateLocators(vtkRenderer* renderer)
     return;
   }
 
-  std::set<vtkPolyData*> shownSurfaces;
+  std::set<vtkDataSet*> shownSurfaces;
   vtkPropCollection* props = renderer->GetViewProps();
   vtkCollectionSimpleIterator propIterator;
   props->InitTraversal(propIterator);
@@ -77,38 +79,43 @@ void vtkMRMLAccuratePicker::UpdateLocators(vtkRenderer* renderer)
     {
       continue;
     }
-    vtkPolyDataMapper* mapper = vtkPolyDataMapper::SafeDownCast(actor->GetMapper());
+    // Any mapper, and the data set it was given: that is what vtkCellPicker scans and what
+    // it matches a locator against, by identity. Asking for a vtkPolyDataMapper instead
+    // would miss the mappers that are not one - an unstructured grid model is drawn through
+    // a vtkDataSetMapper - and those meshes would silently keep the unindexed linear scan
+    // that this class exists to avoid.
+    vtkMapper* mapper = vtkMapper::SafeDownCast(actor->GetMapper());
     if (!mapper)
     {
       continue;
     }
-    vtkPolyData* polyData = vtkPolyData::SafeDownCast(mapper->GetInput());
-    if (!polyData || polyData->GetNumberOfCells() < this->MinimumCellCountToIndex)
+    vtkDataSet* dataSet = mapper->GetInput();
+    if (!dataSet || dataSet->GetNumberOfCells() < this->MinimumCellCountToIndex)
     {
       continue;
     }
 
-    shownSurfaces.insert(polyData);
-    CachedLocator& cached = this->LocatorsBySurface[polyData];
+    shownSurfaces.insert(dataSet);
+    CachedLocator& cached = this->LocatorsBySurface[dataSet];
     if (!cached.Locator)
     {
       vtkNew<vtkStaticCellLocator> locator;
-      locator->SetDataSet(polyData);
+      locator->SetDataSet(dataSet);
       cached.Locator = locator;
       cached.BuildMTime = 0;
     }
-    // Build once, and rebuild only when the surface itself changes, so repeated
-    // picks over an unchanging surface pay the build cost at most once.
-    if (cached.BuildMTime != polyData->GetMTime())
+    // Build once, and rebuild only when the mesh itself changes, so repeated
+    // picks over an unchanging mesh pay the build cost at most once.
+    if (cached.BuildMTime != dataSet->GetMTime())
     {
       cached.Locator->BuildLocator();
-      cached.BuildMTime = polyData->GetMTime();
+      cached.BuildMTime = dataSet->GetMTime();
     }
     this->AddLocator(cached.Locator);
   }
 
-  // Release locators for surfaces that are no longer shown (a cached locator
-  // holds a reference to its poly data).
+  // Release locators for meshes that are no longer shown (a cached locator
+  // holds a reference to its data set).
   for (auto it = this->LocatorsBySurface.begin(); it != this->LocatorsBySurface.end();)
   {
     if (shownSurfaces.find(it->first) == shownSurfaces.end())
@@ -127,6 +134,60 @@ int vtkMRMLAccuratePicker::Pick(double selectionX, double selectionY, double sel
 {
   this->UpdateLocators(renderer);
   return this->Superclass::Pick(selectionX, selectionY, selectionZ, renderer);
+}
+
+//----------------------------------------------------------------------------
+double vtkMRMLAccuratePicker::IntersectWithLine(const double p1[3], const double p2[3], double tol, vtkAssemblyPath* path, vtkProp3D* p, vtkAbstractMapper3D* m)
+{
+  vtkMRMLRayCastMapper* rayCastMapper = vtkMRMLRayCastMapper::SafeDownCast(m);
+  if (!rayCastMapper)
+  {
+    return this->Superclass::IntersectWithLine(p1, p2, tol, path, p, m);
+  }
+  // As vtkCellPicker::IntersectWithLine, but the whole ray is intersected: the mapper applies its clipping planes
+  double tMin = this->IntersectActorWithLine(p1, p2, 0.0, 1.0, tol, p, rayCastMapper);
+  if (tMin < this->GlobalTMin)
+  {
+    this->GlobalTMin = tMin;
+    this->SetPath(path);
+    this->ClippingPlaneId = -1;
+    // The position comes from the data, so put it into world coordinates
+    this->Transform->TransformPoint(this->MapperPosition, this->PickPosition);
+    this->Transform->TransformNormal(this->MapperNormal, this->PickNormal);
+  }
+  return tMin;
+}
+
+//----------------------------------------------------------------------------
+double vtkMRMLAccuratePicker::IntersectActorWithLine(const double p1[3], const double p2[3], double t1, double t2, double tol, vtkProp3D* prop, vtkMapper* m)
+{
+  vtkMapper* mapper = m;
+  vtkMRMLRayCastMapper* rayCastMapper = vtkMRMLRayCastMapper::SafeDownCast(mapper);
+  if (!rayCastMapper)
+  {
+    return this->Superclass::IntersectActorWithLine(p1, p2, t1, t2, tol, prop, mapper);
+  }
+  double t = 0.0;
+  double position[3] = { 0.0, 0.0, 0.0 };
+  double normal[3] = { 0.0, 0.0, 1.0 };
+  // The ray is in the model coordinates of the prop, the matrix of the prop is the transform to world coordinates
+  // (vtkPicker::Pick sets it before intersecting the prop), which the mapper transforms its clipping planes with
+  if (!rayCastMapper->IntersectWithRay(p1, p2, t1, t2, this->Transform->GetMatrix(), t, position, normal) || t < t1 || t > t2)
+  {
+    return VTK_DOUBLE_MAX;
+  }
+  if (t < this->GlobalTMin)
+  {
+    // Same outputs as for cells, except there is no cell
+    this->Mapper = mapper;
+    this->DataSet = nullptr;
+    this->CellId = -1;
+    this->SubId = -1;
+    this->PointId = -1;
+    std::copy_n(position, 3, this->MapperPosition);
+    std::copy_n(normal, 3, this->MapperNormal);
+  }
+  return t;
 }
 
 //----------------------------------------------------------------------------

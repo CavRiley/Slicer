@@ -85,6 +85,7 @@ set(TEST_SOURCES
   qMRMLSliceWidgetTest1.cxx
   qMRMLSliceWidgetTest2.cxx
   qMRMLTableViewTest1.cxx
+  qMRMLTestingSetupTest1.cxx
   qMRMLTransformSlidersTest1.cxx
   qMRMLThreeDViewTest1.cxx
   qMRMLThreeDWidgetTest1.cxx
@@ -232,6 +233,7 @@ simple_test( qMRMLSliceControllerWidgetTest )
 SCENE_TEST( qMRMLSliceWidgetTest1 vol_and_cube.mrml|DATA{${INPUT}/fixed.nrrd,cube.vtk})
 simple_test( qMRMLSliceWidgetTest2_fixed.nrrd DRIVER_TESTNAME qMRMLSliceWidgetTest2 DATA{${INPUT}/fixed.nrrd})
 simple_test( qMRMLTableViewTest1 )
+simple_test( qMRMLTestingSetupTest1 )
 simple_test( qMRMLTransformSlidersTest1 )
 simple_test( qMRMLThreeDViewTest1 )
 simple_test( qMRMLThreeDWidgetTest1 )
@@ -271,7 +273,8 @@ if(Slicer_USE_QtTesting)
     else()
       set(_scenefile "")
     endif()
-    simple_test(${testname} ${Slicer_SOURCE_DIR} ${_scenefile})
+    # Play back recorded events without delay to make the test run faster
+    simple_test(${testname} ${Slicer_SOURCE_DIR} ${_scenefile} --event-playback-delay 0)
     set_tests_properties(${testname} PROPERTIES RUN_SERIAL ON)
   endfunction()
   QtTesting_TEST(qMRMLCheckableNodeComboBoxEventTranslatorPlayerTest1)

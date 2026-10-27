@@ -134,6 +134,26 @@ if(APPLE)
 endif()
 
 #-----------------------------------------------------------------------------
+# Set libraries to leave untouched during macOS bundle fixup and re-signing
+#-----------------------------------------------------------------------------
+if(APPLE)
+  if(NOT DEFINED Slicer_CPACK_BUNDLE_FIXUP_IGNORE_LIBRARY_REGEXES)
+    string(CONCAT _ignore_library_regexes_description
+      "Regular expressions (matched against the Mach-O file name) of macOS bundle "
+      "libraries to leave untouched during bundle fixup and re-signing, "
+      "e.g. vendor libraries shipped with their own valid signature. Their "
+      "dependencies are not resolved or embedded, and their load commands are "
+      "not rewritten. Patterns use an unanchored search against the file name; "
+      "use [.] rather than \\. for literal dots. Ignored libraries must already "
+      "be correctly signed, including nested Mach-O code, when signing/notarizing.")
+    set(Slicer_CPACK_BUNDLE_FIXUP_IGNORE_LIBRARY_REGEXES ""
+      CACHE STRING "${_ignore_library_regexes_description}")
+    mark_as_advanced(Slicer_CPACK_BUNDLE_FIXUP_IGNORE_LIBRARY_REGEXES)
+  endif()
+  mark_as_superbuild(Slicer_CPACK_BUNDLE_FIXUP_IGNORE_LIBRARY_REGEXES:STRING)
+endif()
+
+#-----------------------------------------------------------------------------
 # Set default installation folder and admin account requirement for Windows
 #-----------------------------------------------------------------------------
 if(WIN32)
@@ -204,6 +224,37 @@ if(WIN32)
     endif()
   endforeach()
 endif()
+
+#-----------------------------------------------------------------------------
+# File associations
+#-----------------------------------------------------------------------------
+# File extensions that the installer associates with the application, so that
+# opening such a file starts the application with the file path as argument.
+# Only the Windows installer sets up file associations so far.
+#
+# This does not configure the URL scheme registered by the installer (for example
+# slicer://viewer?host=host.example.com;id=123123), which is always the application
+# name. If it is made configurable, a Slicer_FILE_ASSOCIATION_URL_SCHEMES variable
+# could be introduced for it.
+if(NOT DEFINED Slicer_FILE_ASSOCIATION_EXTENSIONS)
+  set(Slicer_FILE_ASSOCIATION_EXTENSIONS ".mrml;.xcat;.mrb" CACHE STRING
+    "File extensions that the installer associates with the application")
+  mark_as_advanced(Slicer_FILE_ASSOCIATION_EXTENSIONS)
+endif()
+mark_as_superbuild(Slicer_FILE_ASSOCIATION_EXTENSIONS:STRING)
+message(STATUS "Configuring ${Slicer_MAIN_PROJECT_APPLICATION_NAME} file association extensions [${Slicer_FILE_ASSOCIATION_EXTENSIONS}]")
+
+# Check the list here, where the option is defined, so that a bad value is reported
+# when the project is configured, on every platform. The Windows installer writes a
+# registry key named after each extension and removes it on uninstall, so an entry that
+# is not a plain extension could make the uninstaller touch an unrelated key.
+foreach(_ext IN LISTS Slicer_FILE_ASSOCIATION_EXTENSIONS)
+  if(NOT _ext MATCHES "^\\.[A-Za-z0-9][A-Za-z0-9_+-]*$")
+    message(FATAL_ERROR "Slicer_FILE_ASSOCIATION_EXTENSIONS [${Slicer_FILE_ASSOCIATION_EXTENSIONS}] contains \"${_ext}\", "
+      "which is not a file extension. Each entry must be a period followed by letters, digits, '_', '+' or '-', "
+      "for example .mrml")
+  endif()
+endforeach()
 
 #-----------------------------------------------------------------------------
 # Set Slicer_STORE_SETTINGS_IN_APPLICATION_HOME_DIR

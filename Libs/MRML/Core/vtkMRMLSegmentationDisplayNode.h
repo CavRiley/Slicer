@@ -177,9 +177,28 @@ public:
   //@}
 
   /// Determine and set automatic opacities for segments using topological hierarchies.
+  /// Segments that contain other segments (by bounding box) are made more transparent, so that
+  /// the inner segments are visible. The bounding boxes are taken from the representation
+  /// shown in 3D views: poly data, or binary labelmap (the voxels of each segment).
   /// Stores value in opacity component of \sa SegmentDisplayProperties.
   /// \return Success flag
   bool CalculateAutoOpacitiesForSegments();
+
+  //@{
+  /// Binary labelmap representation is shown in 3D views as surfaces computed on the GPU, where translucent segments
+  /// of a layer that have the same opacity share one rendering pipeline (one distance field on the GPU).
+  /// To limit the number of pipelines and to keep a segment in the same pipeline when its opacity is adjusted
+  /// slightly, the opacity of translucent segments is snapped to the closest of NumberOfLabelmapSurfaceOpacityLevels
+  /// evenly spaced levels between 0 and 1 (for example 0.25, 0.5, and 0.75 for 5 levels; 0 and 1 are not used,
+  /// because the segment would be hidden or opaque). More levels show the segment opacities more faithfully,
+  /// fewer levels use less GPU memory. Minimum is 3 (one translucent level), default is 5.
+  /// GetLabelmapSurfaceTranslucentOpacityLevel returns the snapped level (1 .. number of levels - 2) of a translucent
+  /// opacity, GetLabelmapSurfaceTranslucentOpacity returns the opacity of a level.
+  vtkGetMacro(NumberOfLabelmapSurfaceOpacityLevels, int);
+  void SetNumberOfLabelmapSurfaceOpacityLevels(int numberOfLevels);
+  int GetLabelmapSurfaceTranslucentOpacityLevel(double opacity);
+  double GetLabelmapSurfaceTranslucentOpacity(int level);
+  //@}
 
   /// Generate new color for an added segment. Uses \sa NumberOfGeneratedColors to get the color
   /// for the new segment from default label color table
@@ -202,12 +221,18 @@ public:
   /// Collect representation names that are stored as poly data
   void GetPolyDataRepresentationNames(std::set<std::string>& representationNames);
 
-  /// Decide which poly data representation to use for 3D display.
+  /// Decide which representation to use for 3D display.
   /// If preferred representation exists \sa PreferredDisplayRepresentationName3D, then return that.
+  /// The preferred representation may be a poly data representation or binary labelmap
+  /// (binary labelmap is displayed as smooth surfaces computed on the GPU; experimental).
   /// Otherwise if source representation is a poly data then return source representation type.
   /// Otherwise return first poly data representation if any.
   /// Otherwise return empty string meaning there is no poly data representation to display.
   std::string GetDisplayRepresentationName3D();
+
+  /// Return true if binary labelmap is chosen as representation in 3D views
+  /// (shown as smooth surfaces computed on the GPU, without closed surface representation; experimental).
+  bool IsBinaryLabelmapPreferredDisplayRepresentation3D();
 
   /// Decide which representation to use for 2D display.
   /// If preferred representation exists \sa PreferredDisplayRepresentationName2D, then return that.
@@ -382,6 +407,9 @@ protected:
 
   /// 3D opacity for the whole segmentation
   double Opacity3D{ 1.0 };
+  /// Number of opacity levels that translucent segments of a binary labelmap shown in 3D views are snapped to
+  /// \sa SetNumberOfLabelmapSurfaceOpacityLevels
+  int NumberOfLabelmapSurfaceOpacityLevels{ 5 };
   /// 2D fill opacity for the whole segmentation
   double Opacity2DFill{ 0.5 };
   /// 2D outline opacity for the whole segmentation

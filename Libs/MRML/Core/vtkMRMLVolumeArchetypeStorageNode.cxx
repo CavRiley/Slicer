@@ -13,8 +13,10 @@ Version:   $Revision: 1.6 $
 =========================================================================auto=*/
 
 // MRML includes
+#include "vtkCodedEntry.h"
 #include "vtkDataFileFormatHelper.h"
 #include "vtkMRMLI18N.h"
+#include "vtkMRMLScalarVolumeNode.h"
 #include "vtkDataIOManager.h"
 #include "vtkMRMLMessageCollection.h"
 #include "vtkMRMLScene.h"
@@ -30,6 +32,9 @@ Version:   $Revision: 1.6 $
 #include "vtkITKArchetypeImageSeriesVectorReaderFile.h"
 #include "vtkITKArchetypeImageSeriesVectorReaderSeries.h"
 #include "vtkITKImageWriter.h"
+
+// ITK includes
+#include <itkMetaDataObject.h>
 
 // VTKsys includes
 #include <vtksys/SystemTools.hxx>
@@ -515,6 +520,25 @@ int vtkMRMLVolumeArchetypeStorageNode::ReadDataInternal(vtkMRMLNode* refNode)
   int voxelVectorType = this->ConvertVoxelVectorTypeVTKITKToMRML(reader->GetVoxelVectorType());
   volNode->SetVoxelVectorType(voxelVectorType);
 
+  // Unit of the voxel values (stored in the "units" field of the pixel axis in NRRD files, which ITK exposes as NRRD_units[pixel]).
+  // If the file does not specify it then the units of the node are left unchanged.
+  vtkMRMLScalarVolumeNode* scalarVolNode = vtkMRMLScalarVolumeNode::SafeDownCast(volNode);
+  std::string voxelValueUnit;
+  if (scalarVolNode && itk::ExposeMetaData<std::string>(reader->GetMetaDataDictionary(), "NRRD_units[pixel]", voxelValueUnit) && !voxelValueUnit.empty())
+  {
+    // Unit strings in NRRD files are assumed to follow the UCUM standard, as everywhere else in Slicer
+    vtkNew<vtkCodedEntry> voxelValueUnits;
+    voxelValueUnits->SetValueSchemeMeaning(voxelValueUnit, "UCUM", voxelValueUnit);
+    scalarVolNode->SetVoxelValueUnits(voxelValueUnits);
+  }
+  // Quantity of the voxel values (stored in the "labels" field of the pixel axis in NRRD files, which ITK exposes as NRRD_labels[pixel]).
+  // If the file does not specify it then the quantity of the node is left unchanged.
+  std::string voxelValueLabel;
+  if (scalarVolNode && itk::ExposeMetaData<std::string>(reader->GetMetaDataDictionary(), "NRRD_labels[pixel]", voxelValueLabel) && !voxelValueLabel.empty())
+  {
+    scalarVolNode->SetVoxelValueQuantityFromLabel(voxelValueLabel);
+  }
+
   // Log volume size to the application log. It helps to identify potential out-of-memory issues.
   vtkDebugMacro(<< "Loaded volume from file: " << fullName << ". Dimensions: " << outputImage->GetDimensions()[0] << "x" << outputImage->GetDimensions()[1] << "x"
                 << outputImage->GetDimensions()[2] << ". Number of components: " << outputImage->GetNumberOfScalarComponents()
@@ -689,12 +713,30 @@ int vtkMRMLVolumeArchetypeStorageNode::WriteDataInternal(vtkMRMLNode* refNode)
     volNode->GetRASToIJKMatrix(mat.GetPointer());
     writer->SetRasToIJKMatrix(mat.GetPointer());
 
+    // Pass on unit of the voxel values to the writer (NRRD units of the pixel axis)
+    vtkMRMLScalarVolumeNode* scalarVolNode = vtkMRMLScalarVolumeNode::SafeDownCast(volNode);
+    if (scalarVolNode && scalarVolNode->GetVoxelValueUnits() && scalarVolNode->GetVoxelValueUnits()->GetCodeValue())
+    {
+      writer->SetVoxelValueUnit(scalarVolNode->GetVoxelValueUnits()->GetCodeValue());
+    }
+    // Pass on quantity of the voxel values to the writer (NRRD labels of the pixel axis)
+    writer->SetVoxelValueLabel(scalarVolNode ? vtkMRMLScalarVolumeNode::GetVoxelValueQuantityLabel(scalarVolNode->GetVoxelValueQuantity()).c_str() : nullptr);
+
     // Pass on voxel type to the writer
     int voxelVectorType = volNode->GetVoxelVectorType();
     writer->SetVoxelVectorType(this->ConvertVoxelVectorTypeMRMLToVTKITK(voxelVectorType));
     try
     {
       writer->Write();
+      if (writer->GetErrorCode() != vtkErrorCode::NoError)
+      {
+        vtkErrorToMessageCollectionMacro(this->GetUserMessages(),
+                                         "vtkMRMLVolumeArchetypeStorageNode::WriteDataInternal",
+                                         vtkMRMLI18N::Format(vtkMRMLTr("vtkMRMLVolumeArchetypeStorageNode", "Failed to write volume with %1 components to file '%2'."),
+                                                             std::to_string(volNode->GetImageData()->GetNumberOfScalarComponents()).c_str(),
+                                                             fullName.c_str()));
+        result = 0;
+      }
     }
     catch (...)
     {
@@ -886,6 +928,15 @@ std::string vtkMRMLVolumeArchetypeStorageNode::UpdateFileList(vtkMRMLNode* refNo
   vtkNew<vtkMatrix4x4> mat;
   volNode->GetRASToIJKMatrix(mat.GetPointer());
   writer->SetRasToIJKMatrix(mat.GetPointer());
+
+  // Pass on unit of the voxel values to the writer (NRRD units of the pixel axis)
+  vtkMRMLScalarVolumeNode* scalarVolNode = vtkMRMLScalarVolumeNode::SafeDownCast(volNode);
+  if (scalarVolNode && scalarVolNode->GetVoxelValueUnits() && scalarVolNode->GetVoxelValueUnits()->GetCodeValue())
+  {
+    writer->SetVoxelValueUnit(scalarVolNode->GetVoxelValueUnits()->GetCodeValue());
+  }
+  // Pass on quantity of the voxel values to the writer (NRRD labels of the pixel axis)
+  writer->SetVoxelValueLabel(scalarVolNode ? vtkMRMLScalarVolumeNode::GetVoxelValueQuantityLabel(scalarVolNode->GetVoxelValueQuantity()).c_str() : nullptr);
 
   // Pass on voxel type to the writer
   int voxelVectorType = volNode->GetVoxelVectorType();

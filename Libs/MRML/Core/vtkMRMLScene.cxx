@@ -58,6 +58,7 @@ Version:   $Revision: 1.18 $
 #include "vtkMRMLModelNode.h"
 #include "vtkMRMLModelStorageNode.h"
 #include "vtkMRMLNode.h"
+#include "vtkMRMLNodeFactory.h"
 #include "vtkMRMLParser.h"
 #include "vtkMRMLPlotChartNode.h"
 #include "vtkMRMLPlotSeriesNode.h"
@@ -109,7 +110,7 @@ Version:   $Revision: 1.18 $
 // VTK includes
 #include <vtkCallbackCommand.h>
 #include <vtkCollection.h>
-#include <vtkDebugLeaks.h>
+#include <vtkNew.h>
 #include <vtkObjectFactory.h>
 #include <vtkPNGWriter.h>
 #include <vtkSmartPointer.h>
@@ -121,6 +122,7 @@ Version:   $Revision: 1.18 $
 
 // STD includes
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <numeric>
 
@@ -129,6 +131,38 @@ Version:   $Revision: 1.18 $
 #ifdef MRMLSCENE_VERBOSE
 # include <vtkTimerLog.h>
 #endif
+
+//------------------------------------------------------------------------------
+namespace
+{
+// Progress of scene states (import, save) is reported with this resolution (to limit the number of progress events).
+constexpr double PROGRESS_REPORTING_RESOLUTION = 0.01; // 1%
+
+// The progress range of each phase of import is set based on typical time spent in that phase.
+// Parsing the scene file:
+constexpr double IMPORT_PROGRESS_PARSING_END = 0.05;
+// Adding the loaded nodes to the scene:
+constexpr double IMPORT_PROGRESS_ADDING_NODES_END = 0.20;
+// Updating node references (if node IDs conflicted with IDs of nodes that were already in the scene):
+constexpr double IMPORT_PROGRESS_UPDATING_REFERENCES_END = 0.30;
+// Updating the nodes (which includes reading their data files) takes the rest.
+
+//------------------------------------------------------------------------------
+// Report progress (0.0-1.0) of a scene state, rounded down to PROGRESS_REPORTING_RESOLUTION.
+// Progress is only reported if the rounded value is different from the last reported value.
+void ReportProgress(vtkMRMLScene* scene, unsigned long state, double progress, double& lastReportedProgress)
+{
+  // A small tolerance is added to avoid rounding down values (such as 0.3) because of numerical errors
+  double roundedProgress = std::floor(progress / PROGRESS_REPORTING_RESOLUTION + 1e-6) * PROGRESS_REPORTING_RESOLUTION;
+  roundedProgress = std::min(std::max(roundedProgress, 0.0), 1.0);
+  if (roundedProgress == lastReportedProgress)
+  {
+    return;
+  }
+  lastReportedProgress = roundedProgress;
+  scene->ProgressState(state, roundedProgress);
+}
+} // namespace
 
 vtkCxxSetObjectMacro(vtkMRMLScene, CacheManager, vtkCacheManager);
 vtkCxxSetObjectMacro(vtkMRMLScene, DataIOManager, vtkDataIOManager);
@@ -183,97 +217,12 @@ vtkMRMLScene::vtkMRMLScene()
   // is caught by other observers.
   this->AddObserver(vtkCommand::DeleteEvent, this->DeleteEventCallback, 1000.);
 
-  //
-  // Register all the 'built-in' nodes for the library
-  // SmartPointer is used to create an instance of the class, and destroy immediately after registration is complete.
-  // - note: the scene will maintain a registered pointer to the nodes,
-  //   so we delete them here (same should be done by any module that
-  //   creates nodes).
-  //
+  this->NodeFactoryCallback = vtkSmartPointer<vtkCallbackCommand>::New();
+  this->NodeFactoryCallback->SetClientData(reinterpret_cast<void*>(this));
+  this->NodeFactoryCallback->SetCallback(vtkMRMLScene::NodeFactoryEventCallback);
 
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLBSplineTransformNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLCameraNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLClipModelsNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLClipNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLColorTableNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLColorTableStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLCrosshairNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLDiffusionTensorDisplayPropertiesNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLDiffusionWeightedVolumeDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLDiffusionWeightedVolumeNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLDisplayableHierarchyNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLFolderDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLGridTransformNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLHierarchyNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLHierarchyStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLInteractionNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLLabelMapVolumeDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLLabelMapVolumeNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLLayoutNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLLinearTransformNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLLinearTransformSequenceStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLMarkupsAngleNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLMarkupsClosedCurveNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLMarkupsCurveNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLMarkupsDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLMarkupsFiducialDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLMarkupsFiducialNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLMarkupsFiducialStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLMarkupsLineNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLMarkupsPlaneDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLMarkupsPlaneNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLMarkupsROIDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLMarkupsROINode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLModelDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLModelHierarchyNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLModelNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLModelStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLPlotChartNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLPlotSeriesNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLPlotViewNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLProceduralColorNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLProceduralColorStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLROIListNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLROINode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLScalarVolumeDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLScalarVolumeNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLScriptedModuleNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLSegmentationDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLSegmentationNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLSegmentationStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLSelectionNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLSequenceNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLSequenceStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLSliceCompositeNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLSliceDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLSliceNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLSnapshotClipNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLSubjectHierarchyNode>::New()); // Increments next subject hierarchy item ID
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLTableNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLTableStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLTableViewNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLTextNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLTextStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLTransformDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLTransformNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLTransformStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLVectorVolumeDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLViewNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLVolumeArchetypeStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLVolumeSequenceStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLTransformSequenceStorageNode>::New());
-
-#ifdef MRML_USE_vtkTeem
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLDiffusionTensorVolumeDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLDiffusionTensorVolumeNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLDiffusionTensorVolumeSliceDisplayNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLNRRDStorageNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLStreamingVolumeNode>::New());
-  this->RegisterNodeClass(vtkSmartPointer<vtkMRMLVectorVolumeNode>::New());
-#endif
-
-  this->RegisterAbstractNodeClass("vtkMRMLMarkupsNode", "Markup");
-  this->RegisterAbstractNodeClass("vtkMRMLVolumeNode", "Volume");
+  // The node factory (with all the built-in node classes of the library registered)
+  // is created on first use, see GetNodeFactory().
 }
 
 //------------------------------------------------------------------------------
@@ -293,10 +242,13 @@ vtkMRMLScene::~vtkMRMLScene()
     this->Nodes = nullptr;
   }
 
-  for (unsigned int n = 0; n < this->RegisteredNodeClasses.size(); n++)
+  // Events must not be invoked from the destructor, therefore SetNodeFactory(nullptr) is not called here
+  if (this->NodeFactory)
   {
-    this->RegisteredNodeClasses[n]->Delete();
+    this->NodeFactory->RemoveObserver(this->NodeFactoryCallback);
+    this->NodeFactory = nullptr;
   }
+  this->NodeFactoryCallback = nullptr;
 
   if (this->CacheManager != nullptr)
   {
@@ -343,6 +295,52 @@ void vtkMRMLScene::SceneCallback(vtkObject* vtkNotUsed(caller), unsigned long vt
   // are processed, then add a ProcessMRMLEvents method (instead of
   // doing everything in the static function).
   self->Clear(1);
+}
+
+//------------------------------------------------------------------------------
+void vtkMRMLScene::NodeFactoryEventCallback(vtkObject* vtkNotUsed(caller), unsigned long eid, void* clientData, void* vtkNotUsed(callData))
+{
+  vtkMRMLScene* self = reinterpret_cast<vtkMRMLScene*>(clientData);
+  if (self == nullptr)
+  {
+    return;
+  }
+  if (eid == vtkMRMLNodeFactory::NodeClassRegisteredEvent)
+  {
+    self->InvokeEvent(vtkMRMLScene::NodeClassRegisteredEvent);
+  }
+}
+
+//------------------------------------------------------------------------------
+vtkMRMLNodeFactory* vtkMRMLScene::GetNodeFactory()
+{
+  if (!this->NodeFactory)
+  {
+    vtkNew<vtkMRMLNodeFactory> factory;
+    factory->RegisterCoreNodeClasses();
+    this->SetNodeFactory(factory);
+  }
+  return this->NodeFactory;
+}
+
+//------------------------------------------------------------------------------
+void vtkMRMLScene::SetNodeFactory(vtkMRMLNodeFactory* factory)
+{
+  if (factory == this->NodeFactory)
+  {
+    return;
+  }
+  if (this->NodeFactory)
+  {
+    this->NodeFactory->RemoveObserver(this->NodeFactoryCallback);
+  }
+  this->NodeFactory = factory;
+  if (this->NodeFactory)
+  {
+    this->NodeFactory->AddObserver(vtkMRMLNodeFactory::NodeClassRegisteredEvent, this->NodeFactoryCallback);
+  }
+  // The set of registered node classes has changed
+  this->InvokeEvent(vtkMRMLScene::NodeClassRegisteredEvent);
 }
 
 //------------------------------------------------------------------------------
@@ -494,36 +492,10 @@ vtkMRMLNode* vtkMRMLScene::CreateNodeByClass(const char* className)
     vtkErrorMacro("CreateNodeByClass: className is NULL");
     return nullptr;
   }
-  vtkMRMLNode* node = nullptr;
-  for (unsigned int i = 0; i < RegisteredNodeClasses.size(); i++)
+  vtkMRMLNode* node = this->GetNodeFactory()->CreateNodeByClass(className);
+  if (!node)
   {
-    if (!strcmp(RegisteredNodeClasses[i]->GetClassName(), className))
-    {
-      node = RegisteredNodeClasses[i]->CreateNodeInstance();
-      break;
-    }
-  }
-  // non-registered nodes can have a registered factory
-  if (node == nullptr)
-  {
-    vtkObject* ret = vtkObjectFactory::CreateInstance(className);
-    if (ret)
-    {
-      node = static_cast<vtkMRMLNode*>(ret);
-      // Clean memory
-      if (!node)
-      {
-        ret->Delete();
-      }
-    }
-    else
-    {
-#ifndef VTK_HAS_INITIALIZE_OBJECT_BASE
-# ifdef VTK_DEBUG_LEAKS
-      vtkDebugLeaks::DestructClass(className);
-# endif
-#endif
-    }
+    return nullptr;
   }
   // If a default node is specified for this class then initialize the
   // node contents with that
@@ -538,93 +510,29 @@ vtkMRMLNode* vtkMRMLScene::CreateNodeByClass(const char* className)
 //------------------------------------------------------------------------------
 void vtkMRMLScene::RegisterNodeClass(vtkMRMLNode* node)
 {
-  this->RegisterNodeClass(node, node->GetNodeTagName());
+  this->GetNodeFactory()->RegisterNodeClass(node);
 }
 
 //------------------------------------------------------------------------------
 void vtkMRMLScene::RegisterNodeClass(vtkMRMLNode* node, const char* tagName)
 {
-  if (!node)
-  {
-    vtkErrorMacro("RegisterNodeClass: can't register a null node");
-    return;
-  }
-  if (!tagName)
-  {
-    tagName = node->GetNodeTagName();
-  }
-  if (!tagName)
-  {
-    vtkErrorMacro(<< __FUNCTION__ << ": can't register a null tag name for node class " << (node->GetClassName() ? node->GetClassName() : "null"));
-    return;
-  }
-  std::string xmlTag(tagName);
-  // Replace the previously registered node if any.
-  // By doing so we make sure there is no more than 1 node matching a given
-  // XML tag. It allows plugins to MRML to override default behavior when
-  // instantiating nodes via XML tags.
-  for (unsigned int i = 0; i < this->RegisteredNodeTags.size(); ++i)
-  {
-    if (this->RegisteredNodeTags[i] == xmlTag)
-    {
-      vtkWarningMacro("Tag " << tagName << " has already been registered, unregistering previous node class "
-                             << (this->RegisteredNodeClasses[i]->GetClassName() ? this->RegisteredNodeClasses[i]->GetClassName() : "(no class name)") << " to register "
-                             << (node->GetClassName() ? node->GetClassName() : "(no class name)"));
-      // As the node was previously Registered to the scene, we need to
-      // unregister it here. It should destruct the pointer as well (only 1
-      // reference on the node).
-      this->RegisteredNodeClasses[i]->Delete();
-      // Remove the outdated reference to the tag, it will then be added later
-      // (after the for loop).
-      // we could have replace the entry with the new node also.
-      this->RegisteredNodeClasses.erase(this->RegisteredNodeClasses.begin() + i);
-      this->RegisteredNodeTags.erase(this->RegisteredNodeTags.begin() + i);
-      // we found a matching tag, there is maximum one in the list, no need to
-      // search any further
-      break;
-    }
-  }
-
-  node->Register(this);
-  this->RegisteredNodeClasses.push_back(node);
-  this->RegisteredNodeTags.push_back(xmlTag);
-  this->InvokeEvent(vtkMRMLScene::NodeClassRegisteredEvent);
+  this->GetNodeFactory()->RegisterNodeClass(node, tagName);
 }
 
 //------------------------------------------------------------------------------
 void vtkMRMLScene::RegisterAbstractNodeClass(std::string className, std::string typeDisplayName)
 {
-  auto classNameTypeDisplayNameIt = this->RegisteredAbstractNodeClassTypeDisplayNames.find(className);
-  if (classNameTypeDisplayNameIt != this->RegisteredAbstractNodeClassTypeDisplayNames.end())
-  {
-    // class already registered
-    if (classNameTypeDisplayNameIt->second == typeDisplayName)
-    {
-      // no change
-      return;
-    }
-  }
-  this->RegisteredAbstractNodeClassTypeDisplayNames[className] = typeDisplayName;
-  this->InvokeEvent(vtkMRMLScene::NodeClassRegisteredEvent);
+  this->GetNodeFactory()->RegisterAbstractNodeClass(className, typeDisplayName);
 }
 
 //------------------------------------------------------------------------------
 void vtkMRMLScene::CopyRegisteredNodesToScene(vtkMRMLScene* scene)
 {
-  if (scene)
+  if (!scene || scene == this)
   {
-    scene->RegisteredAbstractNodeClassTypeDisplayNames.insert(this->RegisteredAbstractNodeClassTypeDisplayNames.begin(), this->RegisteredAbstractNodeClassTypeDisplayNames.end());
-    vtkMRMLNode* node = nullptr;
-    for (unsigned int i = 0; i < this->RegisteredNodeClasses.size(); i++)
-    {
-      node = this->RegisteredNodeClasses[i]->CreateNodeInstance();
-      if (!scene->GetClassNameByTag(node->GetNodeTagName()))
-      {
-        scene->RegisterNodeClass(node);
-      }
-      node->Delete();
-    }
+    return;
   }
+  scene->GetNodeFactory()->CopyRegisteredNodeClasses(this->GetNodeFactory());
 }
 
 //------------------------------------------------------------------------------
@@ -653,56 +561,19 @@ void vtkMRMLScene::CopySingletonNodesToScene(vtkMRMLScene* scene)
 //------------------------------------------------------------------------------
 const char* vtkMRMLScene::GetClassNameByTag(const char* tagName)
 {
-  if (tagName == nullptr)
-  {
-    vtkErrorMacro("GetClassNameByTag: tagname is null");
-    return nullptr;
-  }
-  for (unsigned int i = 0; i < RegisteredNodeTags.size(); i++)
-  {
-    if (!strcmp(RegisteredNodeTags[i].c_str(), tagName))
-    {
-      return (RegisteredNodeClasses[i])->GetClassName();
-    }
-  }
-  return nullptr;
+  return this->GetNodeFactory()->GetClassNameByTag(tagName);
 }
 
 //------------------------------------------------------------------------------
 const char* vtkMRMLScene::GetTagByClassName(const char* className)
 {
-  if (!className)
-  {
-    vtkErrorMacro("GetTagByClassName: className is null");
-    return nullptr;
-  }
-  for (unsigned int i = 0; i < this->RegisteredNodeClasses.size(); i++)
-  {
-    if (!strcmp(this->RegisteredNodeClasses[i]->GetClassName(), className))
-    {
-      return (this->RegisteredNodeClasses[i])->GetNodeTagName();
-    }
-  }
-  return nullptr;
+  return this->GetNodeFactory()->GetTagByClassName(className);
 }
 
 //------------------------------------------------------------------------------
 std::string vtkMRMLScene::GetTypeDisplayNameByClassName(std::string className)
 {
-  for (unsigned int i = 0; i < this->RegisteredNodeClasses.size(); i++)
-  {
-    if (className.compare(this->RegisteredNodeClasses[i]->GetClassName()) == 0)
-    {
-      // found
-      return (this->RegisteredNodeClasses[i])->GetTypeDisplayName();
-    }
-  }
-  auto classNameTypeDisplayNameIt = this->RegisteredAbstractNodeClassTypeDisplayNames.find(className);
-  if (classNameTypeDisplayNameIt != this->RegisteredAbstractNodeClassTypeDisplayNames.end())
-  {
-    return classNameTypeDisplayNameIt->second;
-  }
-  return "";
+  return this->GetNodeFactory()->GetTypeDisplayNameByClassName(className);
 }
 
 //------------------------------------------------------------------------------
@@ -727,7 +598,7 @@ int vtkMRMLScene::GetStates() const
 }
 
 //------------------------------------------------------------------------------
-void vtkMRMLScene::StartState(unsigned long state, int anticipatedMaxProgress)
+void vtkMRMLScene::StartState(unsigned long state, int vtkNotUsed(anticipatedMaxProgress))
 {
   bool wasBatchProcessing = this->IsBatchProcessing();
   bool wasInState = ((this->GetStates() & state) == state);
@@ -739,7 +610,7 @@ void vtkMRMLScene::StartState(unsigned long state, int anticipatedMaxProgress)
   if (state != vtkMRMLScene::BatchProcessState && //
       !wasInState)
   {
-    this->InvokeEvent(StateEvent | StartEvent | state, reinterpret_cast<void*>(anticipatedMaxProgress));
+    this->InvokeEvent(StateEvent | StartEvent | state);
   }
 }
 
@@ -773,15 +644,16 @@ void vtkMRMLScene::EndState(unsigned long state)
 }
 
 //------------------------------------------------------------------------------
-void vtkMRMLScene::ProgressState(unsigned long state, int progress)
+void vtkMRMLScene::ProgressState(unsigned long state, double progress)
 {
+  progress = std::min(std::max(progress, 0.0), 1.0);
   if (state & vtkMRMLScene::BatchProcessState)
   {
-    this->InvokeEvent(StateEvent | ProgressEvent | vtkMRMLScene::BatchProcessState, reinterpret_cast<void*>(progress));
+    this->InvokeEvent(StateEvent | ProgressEvent | vtkMRMLScene::BatchProcessState, &progress);
   }
   if (state != vtkMRMLScene::BatchProcessState)
   {
-    this->InvokeEvent(StateEvent | ProgressEvent | state, reinterpret_cast<void*>(progress));
+    this->InvokeEvent(StateEvent | ProgressEvent | state, &progress);
   }
 }
 
@@ -847,6 +719,8 @@ int vtkMRMLScene::Import(vtkMRMLMessageCollection* userMessagesInput /*=nullptr*
   this->SetUndoOff();
   this->StartState(vtkMRMLScene::ImportState);
   this->ReferencedIDChanges.clear();
+  double lastReportedProgress = -1.0;
+  ReportProgress(this, vtkMRMLScene::ImportState, 0.0, lastReportedProgress);
 
   // read nodes into a temp scene
   vtkNew<vtkCollection> loadedNodes;
@@ -857,6 +731,8 @@ int vtkMRMLScene::Import(vtkMRMLMessageCollection* userMessagesInput /*=nullptr*
     /// imported scene.
     /// Mark all the node IDs of the scene as reserved so the node ID
     /// generator doesn't choose them.
+    // Parsing is complete, nodes are added and updated now
+    ReportProgress(this, vtkMRMLScene::ImportState, IMPORT_PROGRESS_PARSING_END, lastReportedProgress);
     vtkMRMLNode* node = nullptr;
     vtkCollectionSimpleIterator it;
     for (loadedNodes->InitTraversal(it); (node = (vtkMRMLNode*)loadedNodes->GetNextItemAsObject(it));)
@@ -870,9 +746,15 @@ int vtkMRMLScene::Import(vtkMRMLMessageCollection* userMessagesInput /*=nullptr*
     // in case of singleton nodes the existing singleton node is kept
     // and only the contents is overwritten.
     vtkSmartPointer<vtkCollection> addedNodes = vtkSmartPointer<vtkCollection>::New();
+    const int numberOfLoadedNodes = loadedNodes->GetNumberOfItems();
+    int addedNodeIndex = 0;
     for (loadedNodes->InitTraversal(it); (node = (vtkMRMLNode*)loadedNodes->GetNextItemAsObject(it));)
     {
       addedNodes->AddItem(this->AddNode(node));
+      addedNodeIndex++;
+      const double progressRange = IMPORT_PROGRESS_ADDING_NODES_END - IMPORT_PROGRESS_PARSING_END;
+      double progress = IMPORT_PROGRESS_PARSING_END + progressRange * addedNodeIndex / numberOfLoadedNodes;
+      ReportProgress(this, vtkMRMLScene::ImportState, progress, lastReportedProgress);
     }
 #ifdef MRMLSCENE_VERBOSE
     addNodesTimer->StopTimer();
@@ -892,7 +774,8 @@ int vtkMRMLScene::Import(vtkMRMLMessageCollection* userMessagesInput /*=nullptr*
 
     // Update the node references to the changed node IDs
     // (that conflicted in the current scene and the imported scene)
-    this->UpdateNodeReferences(addedNodes);
+    this->UpdateNodeReferences(addedNodes, IMPORT_PROGRESS_ADDING_NODES_END, IMPORT_PROGRESS_UPDATING_REFERENCES_END, lastReportedProgress);
+    ReportProgress(this, vtkMRMLScene::ImportState, IMPORT_PROGRESS_UPDATING_REFERENCES_END, lastReportedProgress);
     this->RemoveReservedIDs();
 
     // This must run after node references are updated, but before nodes are loaded
@@ -911,10 +794,15 @@ int vtkMRMLScene::Import(vtkMRMLMessageCollection* userMessagesInput /*=nullptr*
     // Notify the imported nodes about that all nodes are created
     // (so the observers can be attached to referenced nodes, etc.)
     // by calling UpdateScene on each node
+    const int numberOfAddedNodes = addedNodes->GetNumberOfItems();
+    int updatedNodeIndex = 0;
     for (addedNodes->InitTraversal(it); (node = (vtkMRMLNode*)addedNodes->GetNextItemAsObject(it));)
     {
-      // double progress = n / (1. * nnodes);
-      // this->InvokeEvent(vtkCommand::ProgressEvent,(void*)&progress);
+      // Report progress (this is the slowest part of import, data files are read here)
+      const double progressRange = 1.0 - IMPORT_PROGRESS_UPDATING_REFERENCES_END;
+      double progress = IMPORT_PROGRESS_UPDATING_REFERENCES_END + progressRange * updatedNodeIndex / numberOfAddedNodes;
+      updatedNodeIndex++;
+      ReportProgress(this, vtkMRMLScene::ImportState, progress, lastReportedProgress);
       vtkDebugMacro("Adding Node: " << (node->GetName() ? node->GetName() : "(undefined)"));
       if (node->GetAddToScene())
       {
@@ -935,6 +823,7 @@ int vtkMRMLScene::Import(vtkMRMLMessageCollection* userMessagesInput /*=nullptr*
 
     this->Modified();
     this->RemoveUnusedNodeReferences();
+    ReportProgress(this, vtkMRMLScene::ImportState, 1.0, lastReportedProgress);
 #ifdef MRMLSCENE_VERBOSE
     updateSceneTimer->StopTimer();
 #endif
@@ -2380,22 +2269,10 @@ void vtkMRMLScene::PrintSelf(ostream& os, vtkIndent indent)
     this->UserTagTable->PrintSelf(os, indent);
   }
 
-  os << indent << "Registered node classes:\n";
-  for (unsigned int n = 0; n < this->RegisteredNodeClasses.size(); n++)
+  if (this->NodeFactory != nullptr)
   {
-    os << indent.GetNextIndent() << "Class name = " << this->RegisteredNodeClasses[n]->GetClassName() << endl;
-    if (this->RegisteredNodeClasses[n]->IsA("vtkMRMLStorageNode"))
-    {
-      vtkMRMLStorageNode* snode = vtkMRMLStorageNode::SafeDownCast(this->RegisteredNodeClasses[n]);
-      const char* exts = snode->GetDefaultWriteFileExtension();
-      os << indent.GetNextIndent().GetNextIndent() << "Default write extension = " << (exts != nullptr ? exts : "NULL") << endl;
-    }
-  }
-
-  os << indent << "Registered abstract node classes:\n";
-  for (auto nodeClassNameTypeDisplayNameIt : this->RegisteredAbstractNodeClassTypeDisplayNames)
-  {
-    os << indent.GetNextIndent() << nodeClassNameTypeDisplayNameIt.first << ": " << nodeClassNameTypeDisplayNameIt.second << endl;
+    os << indent << "Node factory:\n";
+    this->NodeFactory->PrintSelf(os, indent.GetNextIndent());
   }
 }
 
@@ -2426,77 +2303,37 @@ const char* vtkMRMLScene::GetRootDirectory()
 //------------------------------------------------------------------------------
 int vtkMRMLScene::GetNumberOfRegisteredNodeClasses()
 {
-  return static_cast<int>(this->RegisteredNodeClasses.size());
+  return this->GetNodeFactory()->GetNumberOfRegisteredNodeClasses();
 }
 
 //------------------------------------------------------------------------------
 vtkMRMLNode* vtkMRMLScene::GetNthRegisteredNodeClass(int n)
 {
-  if (n >= 0 && n < this->GetNumberOfRegisteredNodeClasses())
-  {
-    return this->RegisteredNodeClasses[n];
-  }
-  else
-  {
-    vtkErrorMacro("GetNthRegisteredNodeClass: index " << n << " out of bounds 0 - " << this->GetNumberOfRegisteredNodeClasses());
-    return nullptr;
-  }
+  return this->GetNodeFactory()->GetNthRegisteredNodeClass(n);
 }
 
 //------------------------------------------------------------------------------
 int vtkMRMLScene::GetNumberOfRegisteredAbstractNodeClasses()
 {
-  return static_cast<int>(this->RegisteredAbstractNodeClassTypeDisplayNames.size());
+  return this->GetNodeFactory()->GetNumberOfRegisteredAbstractNodeClasses();
 }
 
 //------------------------------------------------------------------------------
 std::string vtkMRMLScene::GetNthRegisteredAbstractNodeClassName(int n)
 {
-  if (n >= 0 && n < this->GetNumberOfRegisteredAbstractNodeClasses())
-  {
-    auto classNameTypeDisplayNameIt = this->RegisteredAbstractNodeClassTypeDisplayNames.begin();
-    std::advance(classNameTypeDisplayNameIt, n);
-    return classNameTypeDisplayNameIt->first;
-  }
-  else
-  {
-    vtkErrorMacro("GetNthRegisteredAbstractNodeClassName: index " << n << " out of bounds 0 - " << this->GetNumberOfRegisteredAbstractNodeClasses());
-    return "";
-  }
+  return this->GetNodeFactory()->GetNthRegisteredAbstractNodeClassName(n);
 }
 
 //------------------------------------------------------------------------------
 std::string vtkMRMLScene::GetNthRegisteredAbstractNodeTypeDisplayName(int n)
 {
-  if (n >= 0 && n < this->GetNumberOfRegisteredAbstractNodeClasses())
-  {
-    auto classNameTypeDisplayNameIt = this->RegisteredAbstractNodeClassTypeDisplayNames.begin();
-    std::advance(classNameTypeDisplayNameIt, n);
-    return classNameTypeDisplayNameIt->second;
-  }
-  else
-  {
-    vtkErrorMacro("GetNthRegisteredAbstractNodeTypeDisplayName: index " << n << " out of bounds 0 - " << this->GetNumberOfRegisteredAbstractNodeClasses());
-    return "";
-  }
+  return this->GetNodeFactory()->GetNthRegisteredAbstractNodeTypeDisplayName(n);
 }
 
 //------------------------------------------------------------------------------
 bool vtkMRMLScene::IsNodeClassRegistered(const std::string& className)
 {
-  for (int index = 0; index < this->GetNumberOfRegisteredNodeClasses(); ++index)
-  {
-    vtkMRMLNode* registeredNodeClass = this->GetNthRegisteredNodeClass(index);
-    if (!registeredNodeClass)
-    {
-      continue;
-    }
-    if (className == registeredNodeClass->GetClassName())
-    {
-      return true;
-    }
-  }
-  return false;
+  return this->GetNodeFactory()->IsNodeClassRegistered(className);
 }
 
 //------------------------------------------------------------------------------
@@ -3334,8 +3171,24 @@ const char* vtkMRMLScene::GetChangedID(const char* id)
 //------------------------------------------------------------------------------
 void vtkMRMLScene::UpdateNodeReferences(vtkCollection* checkNodes /*=nullptr*/)
 {
+  double lastReportedProgress = -1.0;
+  this->UpdateNodeReferences(checkNodes, -1.0, -1.0, lastReportedProgress);
+}
+
+//-----------------------------------------------------------------------------
+void vtkMRMLScene::UpdateNodeReferences(vtkCollection* checkNodes, double progressRangeStart, double progressRangeEnd, double& lastReportedProgress)
+{
+  const bool reportProgress = (progressRangeStart >= 0.0 && progressRangeEnd > progressRangeStart);
+  const int numberOfChangedIDs = static_cast<int>(this->ReferencedIDChanges.size());
+  int changedIDIndex = 0;
   for (std::map<std::string, std::string>::const_iterator iterChanged = this->ReferencedIDChanges.begin(); iterChanged != this->ReferencedIDChanges.end(); iterChanged++)
   {
+    if (reportProgress)
+    {
+      double progress = progressRangeStart + (progressRangeEnd - progressRangeStart) * changedIDIndex / numberOfChangedIDs;
+      ReportProgress(this, vtkMRMLScene::ImportState, progress, lastReportedProgress);
+    }
+    changedIDIndex++;
     const std::string& oldID = iterChanged->first;
     const std::string& newID = iterChanged->second;
     NodeReferencesType::iterator referencedIdIt = this->NodeReferences.find(oldID);
@@ -3975,6 +3828,19 @@ std::string vtkMRMLScene::GetTemporaryBundleDirectory()
 //----------------------------------------------------------------------------
 bool vtkMRMLScene::WriteToMRB(const char* filename, vtkImageData* thumbnail /*=nullptr*/, vtkMRMLMessageCollection* userMessages /*=nullptr*/)
 {
+  this->StartState(vtkMRMLScene::SaveState);
+  bool success = this->WriteToMRBInternal(filename, thumbnail, userMessages);
+  if (success)
+  {
+    this->ProgressState(vtkMRMLScene::SaveState, 1.0);
+  }
+  this->EndState(vtkMRMLScene::SaveState);
+  return success;
+}
+
+//-----------------------------------------------------------------------------
+bool vtkMRMLScene::WriteToMRBInternal(const char* filename, vtkImageData* thumbnail, vtkMRMLMessageCollection* userMessages)
+{
   //
   // make a temp directory to save the scene into - this will
   // be a uniquely named directory that contains a directory
@@ -4029,7 +3895,9 @@ bool vtkMRMLScene::WriteToMRB(const char* filename, vtkImageData* thumbnail /*=n
   // Now save the scene into the bundle directory and then make a zip (mrb) file
   // in the user's selected file location
   //
-  bool retval = this->SaveSceneToSlicerDataBundleDirectory(bundleDir.c_str(), thumbnail, userMessages);
+  // Saving the scene and the data files takes most of the time, the rest is for compressing the bundle
+  const double savingProgressEnd = 0.8;
+  bool retval = this->SaveSceneToSlicerDataBundleDirectoryInternal(bundleDir.c_str(), thumbnail, userMessages, 0.0, savingProgressEnd);
   if (!retval)
   {
     vtkErrorToMessageCollectionMacro(
@@ -4249,6 +4117,20 @@ std::string vtkMRMLScene::UnpackSlicerDataBundle(const char* sdbFilePath, const 
 //----------------------------------------------------------------------------
 bool vtkMRMLScene::SaveSceneToSlicerDataBundleDirectory(const char* sdbDir, vtkImageData* screenShot /*=nullptr*/, vtkMRMLMessageCollection* userMessagesInput /*=nullptr*/)
 {
+  this->StartState(vtkMRMLScene::SaveState);
+  // Completion (100%) is reported by SaveSceneToSlicerDataBundleDirectoryInternal at the end of the progress range
+  bool success = this->SaveSceneToSlicerDataBundleDirectoryInternal(sdbDir, screenShot, userMessagesInput, 0.0, 1.0);
+  this->EndState(vtkMRMLScene::SaveState);
+  return success;
+}
+
+//----------------------------------------------------------------------------
+bool vtkMRMLScene::SaveSceneToSlicerDataBundleDirectoryInternal(const char* sdbDir,
+                                                                vtkImageData* screenShot,
+                                                                vtkMRMLMessageCollection* userMessagesInput,
+                                                                double progressRangeStart,
+                                                                double progressRangeEnd)
+{
   // Overview:
   // - confirm the arguments are valid and create directories if needed
   // - save all current file storage paths in the scene
@@ -4370,6 +4252,21 @@ bool vtkMRMLScene::SaveSceneToSlicerDataBundleDirectory(const char* sdbDir, vtkI
   bool success = true;
   std::map<std::string, vtkMRMLNode*> storableNodes;
   int numNodes = this->GetNumberOfNodes();
+
+  // Progress is reported after each storable node is saved, writing the scene file is the last step
+  int numberOfStorableNodesToSave = 0;
+  for (int i = 0; i < numNodes; ++i)
+  {
+    vtkMRMLStorableNode* storableNode = vtkMRMLStorableNode::SafeDownCast(this->GetNthNode(i));
+    if (storableNode && !storableNode->GetHideFromEditors())
+    {
+      numberOfStorableNodesToSave++;
+    }
+  }
+  int numberOfSavedStorableNodes = 0;
+  double lastReportedProgress = -1.0;
+  ReportProgress(this, vtkMRMLScene::SaveState, progressRangeStart, lastReportedProgress);
+
   for (int i = 0; i < numNodes; ++i)
   {
     vtkMRMLNode* mrmlNode = this->GetNthNode(i);
@@ -4415,12 +4312,17 @@ bool vtkMRMLScene::SaveSceneToSlicerDataBundleDirectory(const char* sdbDir, vtkI
         success = false;
       }
       storableNodes[std::string(storableNode->GetID())] = storableNode;
+      numberOfSavedStorableNodes++;
+      const double progressRange = progressRangeEnd - progressRangeStart;
+      double progress = progressRangeStart + progressRange * numberOfSavedStorableNodes / (numberOfStorableNodesToSave + 1);
+      ReportProgress(this, vtkMRMLScene::SaveState, progress, lastReportedProgress);
     }
   }
 
   // write the scene to disk, changes paths to relative
   vtkDebugMacro("calling commit on the scene, to url " << this->GetURL());
   this->Commit(nullptr, userMessages);
+  ReportProgress(this, vtkMRMLScene::SaveState, progressRangeEnd, lastReportedProgress);
 
   //
   // Now, restore the state of the scene

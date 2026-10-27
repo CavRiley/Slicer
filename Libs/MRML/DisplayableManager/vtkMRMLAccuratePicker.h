@@ -30,7 +30,6 @@
 
 class vtkAbstractCellLocator;
 class vtkDataSet;
-class vtkPolyData;
 class vtkRenderer;
 
 /// \brief A cell picker that stays fast when large surfaces are shown.
@@ -84,6 +83,18 @@ protected:
   /// when the surface changes) and drop locators for surfaces no longer shown.
   void UpdateLocators(vtkRenderer* renderer);
 
+  /// Intersect the pick ray with a prop. The ray of a vtkMRMLRayCastMapper is not clipped with the clipping planes of
+  /// the mapper first, as vtkCellPicker does, because the mapper applies them itself (see
+  /// vtkMRMLRayCastMapper::IntersectWithRay): vtkCellPicker would limit the pick to where all plane functions are
+  /// positive, which is not what the mapper keeps in all of its clipping modes. Other props are intersected as in
+  /// vtkCellPicker.
+  double IntersectWithLine(const double p1[3], const double p2[3], double tol, vtkAssemblyPath* path, vtkProp3D* p, vtkAbstractMapper3D* m) override;
+
+  /// Intersect the pick ray with an actor. If the mapper is a vtkMRMLRayCastMapper (it renders a surface without
+  /// geometry that could be intersected) then the mapper computes the intersection, otherwise the cells of the
+  /// mapper are intersected as in vtkCellPicker.
+  double IntersectActorWithLine(const double p1[3], const double p2[3], double t1, double t2, double tol, vtkProp3D* prop, vtkMapper* mapper) override;
+
   /// Pick the cell that the ray hits.
   ///
   /// vtkCellPicker picks cells within the pick tolerance of the ray, at the
@@ -120,9 +131,9 @@ protected:
     vtkSmartPointer<vtkAbstractCellLocator> Locator;
     vtkMTimeType BuildMTime{ 0 };
   };
-  /// Locator of each indexed surface. Not named Locators, which would hide
+  /// Locator of each indexed mesh. Not named Locators, which would hide
   /// vtkCellPicker::Locators (the locators that the picker uses).
-  std::map<vtkPolyData*, CachedLocator> LocatorsBySurface;
+  std::map<vtkDataSet*, CachedLocator> LocatorsBySurface;
 
   vtkIdType MinimumCellCountToIndex{ 10000 };
 

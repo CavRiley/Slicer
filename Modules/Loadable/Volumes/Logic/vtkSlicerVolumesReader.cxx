@@ -219,6 +219,14 @@ std::string vtkSlicerVolumesReader::ExamineFileList(std::vector<std::string>& fi
   for (size_t fileIndex = 0; fileIndex < fileList.size(); ++fileIndex)
   {
     const std::string archetypeFile = fileList[fileIndex];
+    // Only 2D image files are grouped into an image series. Other files that have numbers in their names
+    // (such as "plane_1.mrk.json" or 3D volumes "frame_1.nrrd") must be loaded one by one.
+    static const std::vector<std::string> imageSeriesExtensions = { ".png", ".tif", ".tiff", ".jpg", ".jpeg" };
+    const std::string extension = vtksys::SystemTools::LowerCase(vtksys::SystemTools::GetFilenameLastExtension(archetypeFile));
+    if (std::find(imageSeriesExtensions.begin(), imageSeriesExtensions.end(), extension) == imageSeriesExtensions.end())
+    {
+      continue;
+    }
     std::vector<std::string> candidateFiles;
     try
     {
@@ -236,10 +244,20 @@ std::string vtkSlicerVolumesReader::ExamineFileList(std::vector<std::string>& fi
     {
       continue;
     }
+    // Normalize paths before comparison: ITK returns absolute paths with forward slashes,
+    // while the input list may contain relative paths or backslashes.
+    std::vector<std::string> normalizedCandidateFiles;
+    for (const std::string& candidateFile : candidateFiles)
+    {
+      normalizedCandidateFiles.push_back(vtksys::SystemTools::CollapseFullPath(candidateFile));
+    }
+    const std::string normalizedArchetypeFile = vtksys::SystemTools::CollapseFullPath(archetypeFile);
     std::vector<std::string> remainingFiles;
     for (const std::string& path : fileList)
     {
-      if (path != archetypeFile && std::find(candidateFiles.begin(), candidateFiles.end(), path) != candidateFiles.end())
+      const std::string normalizedPath = vtksys::SystemTools::CollapseFullPath(path);
+      if (normalizedPath != normalizedArchetypeFile
+          && std::find(normalizedCandidateFiles.begin(), normalizedCandidateFiles.end(), normalizedPath) != normalizedCandidateFiles.end())
       {
         continue;
       }

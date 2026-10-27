@@ -44,6 +44,7 @@ create_test_sourcelist(Tests ${KIT}CxxTests.cxx
   vtkMRMLModelNodeTest1.cxx
   vtkMRMLModelStorageNodeTest1.cxx
   vtkMRMLNRRDStorageNodeTest1.cxx
+  vtkMRMLNodeFactoryTest1.cxx
   vtkMRMLNodeTest1.cxx
   vtkMRMLNonlinearTransformNodeTest1.cxx
   vtkMRMLPETProceduralColorNodeTest1.cxx
@@ -63,7 +64,9 @@ create_test_sourcelist(Tests ${KIT}CxxTests.cxx
   vtkMRMLSceneImportIDConflictTest.cxx
   vtkMRMLSceneImportIDModelHierarchyConflictTest.cxx
   vtkMRMLSceneImportIDModelHierarchyParentIDConflictTest.cxx
+  vtkMRMLSceneImportProgressTest.cxx
   vtkMRMLSceneImportTest.cxx
+  vtkMRMLSceneSaveProgressTest.cxx
   vtkMRMLSceneTest1.cxx
   vtkMRMLSceneTest2.cxx
   vtkMRMLSceneDefaultNodeTest.cxx
@@ -165,6 +168,7 @@ simple_test( vtkMRMLModelDisplayNodeTest1 )
 simple_test( vtkMRMLModelHierarchyNodeTest1 )
 simple_test( vtkMRMLModelNodeTest1 )
 simple_test( vtkMRMLModelStorageNodeTest1 ${TEMP})
+simple_test( vtkMRMLNodeFactoryTest1 )
 simple_test( vtkMRMLNodeTest1 )
 simple_test( vtkMRMLLinearTransformNodeEventsTest )
 simple_test( vtkMRMLNonlinearTransformNodeTest1 ${CMAKE_CURRENT_SOURCE_DIR}/NonLinearTransformScene.mrml)
@@ -186,6 +190,8 @@ simple_test( vtkMRMLSceneImportIDConflictTest )
 simple_test( vtkMRMLSceneImportIDModelHierarchyConflictTest )
 simple_test( vtkMRMLSceneImportIDModelHierarchyParentIDConflictTest )
 simple_test( vtkMRMLSceneIDTest )
+simple_test( vtkMRMLSceneImportProgressTest )
+simple_test( vtkMRMLSceneSaveProgressTest ${TEMP} )
 simple_test( vtkMRMLSceneTest1 )
 simple_test( vtkMRMLSceneDefaultNodeTest )
 simple_test( vtkMRMLSegmentationNodeTest1 )

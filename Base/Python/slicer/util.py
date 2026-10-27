@@ -1223,7 +1223,8 @@ def loadSegmentation(filename, properties={}, returnNode=False):
 
         - name: this name will be used as node name for the loaded volume
         - autoOpacities: automatically make large segments semi-transparent to make segments inside more visible
-          (only used when loading segmentation from image file)
+          (only used when loading segmentation from image file, and only if the representation shown in 3D views,
+          closed surface or binary labelmap, is in the file)
         - colorNodeID: use a color node (that already in the scene) to display the image
           (only used when loading segmentation from image file)
     :param returnNode: Deprecated.
@@ -1913,8 +1914,8 @@ def getNodesByClass(className, scene=None):
 
     if scene is None:
         scene = slicer.mrmlScene
-    nodes = slicer.mrmlScene.GetNodesByClass(className)
-    nodes.UnRegister(slicer.mrmlScene)
+    nodes = scene.GetNodesByClass(className)
+    nodes.UnRegister(scene)
     nodeList = []
     nodes.InitTraversal()
     node = nodes.GetNextItemAsObject()
@@ -2385,7 +2386,7 @@ def updateTransformMatrixFromArray(transformNode, narray, toWorld=False):
         raise RuntimeError("Unsupported numpy array shape: " + str(narrayshape) + " expected (4,4)")
     if toWorld and transformNode.GetParentTransformNode():
         # thisToParent = worldToParent * thisToWorld = inv(parentToWorld) * toWorld
-        narrayParentToWorld = arrayFromTransformMatrix(transformNode.GetParentTransformNode())
+        narrayParentToWorld = arrayFromTransformMatrix(transformNode.GetParentTransformNode(), toWorld=True)
         thisToParent = np.dot(np.linalg.inv(narrayParentToWorld), narray)
         updateTransformMatrixFromArray(transformNode, thisToParent, toWorld=False)
     else:

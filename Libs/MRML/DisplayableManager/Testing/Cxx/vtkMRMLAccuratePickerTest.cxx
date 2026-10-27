@@ -28,15 +28,23 @@
 
 // MRMLDisplayableManager includes
 #include "vtkMRMLAccuratePicker.h"
+#include "vtkMRMLRayCastMapper.h"
 
 // VTK includes
 #include <vtkActor.h>
+#include <vtkAppendFilter.h>
 #include <vtkCamera.h>
 #include <vtkCellArray.h>
 #include <vtkCellType.h>
+#include <vtkDataSetMapper.h>
 #include <vtkGenericCell.h>
+#include <vtkImageData.h>
 #include <vtkMath.h>
 #include <vtkNew.h>
+#include <vtkMatrix4x4.h>
+#include <vtkObjectFactory.h>
+#include <vtkPlane.h>
+#include <vtkPlaneCollection.h>
 #include <vtkPlaneSource.h>
 #include <vtkPointData.h>
 #include <vtkPoints.h>
@@ -49,6 +57,7 @@
 #include <vtkStaticCellLocator.h>
 #include <vtkTimerLog.h>
 #include <vtkTriangleFilter.h>
+#include <vtkUnstructuredGrid.h>
 
 // STD includes
 #include <algorithm>
@@ -60,31 +69,191 @@ namespace
 {
 
 //----------------------------------------------------------------------------
-int TestPickIsFast()
+// A mapper without pickable geometry: the ray is intersected with a plane at a chosen z (in model coordinates)
+// instead of the cells of the input. The input is only used for the bounds of the prop.
+class TestRayCastMapper : public vtkMRMLRayCastMapper
 {
-  // A large, pickable surface standing in for a segmentation closed surface.
-  vtkNew<vtkSphereSource> sphere;
-  sphere->SetThetaResolution(900);
-  sphere->SetPhiResolution(900);
-  sphere->Update();
-  const vtkIdType numberOfCells = sphere->GetOutput()->GetNumberOfCells();
-  std::cout << "Large surface: " << numberOfCells << " cells" << std::endl;
+public:
+  static TestRayCastMapper* New();
+  vtkTypeMacro(TestRayCastMapper, vtkMRMLRayCastMapper);
 
-  vtkNew<vtkPolyDataMapper> mapper;
-  // SetInputData (not a pipeline connection) so the mapper's input poly data is
-  // available for locator building without a render/update.
-  mapper->SetInputData(sphere->GetOutput());
-  vtkNew<vtkActor> actor;
-  actor->SetMapper(mapper);
+  void Render(vtkRenderer*, vtkActor*) override {}
+
+  bool IntersectWithRay(const double p1[3], const double p2[3], double t1, double t2, vtkMatrix4x4* toWorld, double& t, double xyz[3], double n[3]) override
+  {
+    this->NumberOfCalls++;
+    this->LastT1 = t1;
+    this->LastT2 = t2;
+    this->LastModelToWorld = toWorld;
+    if (!this->Intersects || p1[2] == p2[2])
+    {
+      return false;
+    }
+    t = (this->PlaneZ - p1[2]) / (p2[2] - p1[2]);
+    if (t < t1 || t > t2)
+    {
+      return false;
+    }
+    for (int axis = 0; axis < 3; ++axis)
+    {
+      xyz[axis] = p1[axis] + t * (p2[axis] - p1[axis]);
+    }
+    n[0] = 0.0;
+    n[1] = 0.0;
+    n[2] = 1.0;
+    return true;
+  }
+
+  bool Intersects{ true };
+  double PlaneZ{ 0.0 };
+  int NumberOfCalls{ 0 };
+  double LastT1{ -1.0 };
+  double LastT2{ -1.0 };
+  vtkMatrix4x4* LastModelToWorld{ nullptr };
+
+protected:
+  TestRayCastMapper() = default;
+};
+vtkStandardNewMacro(TestRayCastMapper);
+
+//----------------------------------------------------------------------------
+int TestPickRayCastMapper()
+{
+  // A ray cast mapper (bounds of a sphere of radius 10 at the origin) in front of a mesh plane at z = -20,
+  // looked at from +z and picked at the center of the view
+  vtkNew<vtkSphereSource> sphere;
+  sphere->SetRadius(10.0);
+  sphere->Update();
+  vtkNew<TestRayCastMapper> rayCastMapper;
+  rayCastMapper->SetInputDataObject(sphere->GetOutput());
+  rayCastMapper->PlaneZ = 5.0; // inside the bounds, where the cells of the sphere would not be hit
+  vtkNew<vtkActor> rayCastActor;
+  rayCastActor->SetMapper(rayCastMapper);
+
+  vtkNew<vtkPlaneSource> plane;
+  plane->SetOrigin(-50.0, -50.0, -20.0);
+  plane->SetPoint1(50.0, -50.0, -20.0);
+  plane->SetPoint2(-50.0, 50.0, -20.0);
+  plane->Update();
+  vtkNew<vtkPolyDataMapper> planeMapper;
+  planeMapper->SetInputData(plane->GetOutput());
+  vtkNew<vtkActor> planeActor;
+  planeActor->SetMapper(planeMapper);
 
   vtkNew<vtkRenderer> renderer;
-  renderer->AddActor(actor);
+  renderer->AddActor(rayCastActor);
+  renderer->AddActor(planeActor);
   vtkNew<vtkRenderWindow> renderWindow;
   renderWindow->SetOffScreenRendering(1);
-  renderWindow->SetSize(300, 300);
+  renderWindow->SetSize(200, 200);
   renderWindow->AddRenderer(renderer);
+  vtkCamera* camera = renderer->GetActiveCamera();
+  camera->SetPosition(0.0, 0.0, 100.0);
+  camera->SetFocalPoint(0.0, 0.0, 0.0);
+  camera->SetViewUp(0.0, 1.0, 0.0);
+  renderer->ResetCameraClippingRange();
+
+  vtkNew<vtkMRMLAccuratePicker> picker;
+  picker->SetTolerance(0.005);
+
+  // The ray cast mapper is asked for the intersection and it is picked, in front of the plane
+  if (!picker->Pick(100, 100, 0, renderer))
+  {
+    std::cerr << "Failed: nothing was picked" << std::endl;
+    return EXIT_FAILURE;
+  }
+  if (rayCastMapper->NumberOfCalls == 0)
+  {
+    std::cerr << "Failed: the ray cast mapper was not asked to intersect the ray" << std::endl;
+    return EXIT_FAILURE;
+  }
+  if (picker->GetMapper() != rayCastMapper.GetPointer() || picker->GetActor() != rayCastActor.GetPointer())
+  {
+    std::cerr << "Failed: the ray cast mapper was not picked" << std::endl;
+    return EXIT_FAILURE;
+  }
+  double* mapperPosition = picker->GetMapperPosition();
+  double* pickPosition = picker->GetPickPosition();
+  double* pickNormal = picker->GetPickNormal();
+  if (std::fabs(mapperPosition[2] - rayCastMapper->PlaneZ) > 1e-6 || std::fabs(pickPosition[2] - rayCastMapper->PlaneZ) > 1e-6)
+  {
+    std::cerr << "Failed: picked position z = " << pickPosition[2] << ", expected " << rayCastMapper->PlaneZ << std::endl;
+    return EXIT_FAILURE;
+  }
+  if (std::fabs(pickNormal[2] - 1.0) > 1e-6)
+  {
+    std::cerr << "Failed: pick normal is not the normal reported by the mapper" << std::endl;
+    return EXIT_FAILURE;
+  }
+  if (picker->GetCellId() != -1 || picker->GetDataSet() != nullptr)
+  {
+    std::cerr << "Failed: a cell was reported for a surface without cells" << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  // The mapper applies its clipping planes itself (in all of its clipping modes), so the ray is not clipped with them
+  // first: a plane that clips the whole ray as vtkCellPicker clips (keeping where all plane functions are positive)
+  // still leaves the mapper to decide, with the whole ray and the matrix of the prop to transform the planes with
+  vtkNew<vtkPlane> clippingPlane;
+  clippingPlane->SetOrigin(50.0, 0.0, 0.0);
+  clippingPlane->SetNormal(1.0, 0.0, 0.0);
+  vtkNew<vtkPlaneCollection> clippingPlanes;
+  clippingPlanes->AddItem(clippingPlane);
+  rayCastMapper->SetClippingPlanes(clippingPlanes);
+  rayCastMapper->NumberOfCalls = 0;
+  if (!picker->Pick(100, 100, 0, renderer) || picker->GetMapper() != rayCastMapper.GetPointer())
+  {
+    std::cerr << "Failed: the ray cast mapper was not picked when vtkCellPicker would clip the whole ray" << std::endl;
+    return EXIT_FAILURE;
+  }
+  if (rayCastMapper->NumberOfCalls == 0 || rayCastMapper->LastT1 != 0.0 || rayCastMapper->LastT2 != 1.0)
+  {
+    std::cerr << "Failed: the ray cast mapper was not asked to intersect the whole ray";
+    std::cerr << " (t1 = " << rayCastMapper->LastT1 << ", t2 = " << rayCastMapper->LastT2 << ")" << std::endl;
+    return EXIT_FAILURE;
+  }
+  if (!rayCastMapper->LastModelToWorld)
+  {
+    std::cerr << "Failed: the ray cast mapper was not given the matrix of the prop" << std::endl;
+    return EXIT_FAILURE;
+  }
+  pickPosition = picker->GetPickPosition();
+  if (std::fabs(pickPosition[2] - rayCastMapper->PlaneZ) > 1e-6 || picker->GetClippingPlaneId() != -1)
+  {
+    std::cerr << "Failed: picked position z = " << pickPosition[2] << ", expected " << rayCastMapper->PlaneZ << ", not on a clipping plane" << std::endl;
+    return EXIT_FAILURE;
+  }
+  rayCastMapper->RemoveAllClippingPlanes();
+
+  // If the ray cast mapper reports no intersection then the plane behind it is picked
+  rayCastMapper->Intersects = false;
+  if (!picker->Pick(100, 100, 0, renderer))
+  {
+    std::cerr << "Failed: the plane behind the ray cast mapper was not picked" << std::endl;
+    return EXIT_FAILURE;
+  }
+  if (picker->GetActor() != planeActor.GetPointer() || picker->GetCellId() < 0)
+  {
+    std::cerr << "Failed: the plane was not picked by its cells" << std::endl;
+    return EXIT_FAILURE;
+  }
+  pickPosition = picker->GetPickPosition();
+  if (std::fabs(pickPosition[2] + 20.0) > 1e-3)
+  {
+    std::cerr << "Failed: picked position z = " << pickPosition[2] << ", expected -20" << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  return EXIT_SUCCESS;
+}
+
+//----------------------------------------------------------------------------
+/// Renders what the renderer holds, then times repeated picks at the middle of the view.
+/// Returns false if a pick misses or if the picks are too slow to have been indexed.
+bool PicksAreFastFor(vtkRenderer* renderer, const char* description, vtkIdType numberOfCells)
+{
   renderer->ResetCamera();
-  renderWindow->Render();
+  renderer->GetRenderWindow()->Render();
 
   vtkNew<vtkMRMLAccuratePicker> picker;
   picker->SetTolerance(0.005);
@@ -92,16 +261,16 @@ int TestPickIsFast()
   const int x = 150;
   const int y = 150;
 
-  // First pick: must hit the surface, and pays the one-time locator build.
+  // First pick: must hit the mesh, and pays the one-time locator build.
   if (!picker->Pick(x, y, 0, renderer))
   {
-    std::cerr << "Failed: pick did not hit the surface at the view center" << std::endl;
-    return EXIT_FAILURE;
+    std::cerr << "Failed: pick did not hit the " << description << " at the view center" << std::endl;
+    return false;
   }
   if (picker->GetActor() == nullptr)
   {
-    std::cerr << "Failed: pick did not report the surface actor" << std::endl;
-    return EXIT_FAILURE;
+    std::cerr << "Failed: pick did not report the actor of the " << description << std::endl;
+    return false;
   }
 
   // Repeated picks (as during a drag or hover) must be fast because the picker
@@ -116,7 +285,7 @@ int TestPickIsFast()
   }
   timer->StopTimer();
   const double millisecondsPerPick = timer->GetElapsedTime() / numberOfPicks * 1000.0;
-  std::cout << "vtkMRMLAccuratePicker over " << numberOfCells << " cells: " << millisecondsPerPick << " ms/pick" << std::endl;
+  std::cout << description << " (" << numberOfCells << " cells): " << millisecondsPerPick << " ms/pick" << std::endl;
 
   // Generous threshold: the accelerated pick is well under a millisecond, while
   // an un-indexed brute-force pick over this mesh is far above 30 ms on any
@@ -124,9 +293,69 @@ int TestPickIsFast()
   const double thresholdMillisecondsPerPick = 30.0;
   if (millisecondsPerPick > thresholdMillisecondsPerPick)
   {
-    std::cerr << "Failed: " << millisecondsPerPick << " ms/pick (threshold " << thresholdMillisecondsPerPick
-              << " ms). Large-surface picks are not locator-accelerated, so control-point dragging "
-              << "and hover read-out would be janky when a large surface is shown." << std::endl;
+    std::cerr << "Failed: " << description << " " << millisecondsPerPick << " ms/pick (threshold " << thresholdMillisecondsPerPick
+              << " ms). Picks over it are not locator-accelerated, so control-point dragging "
+              << "and hover read-out would be janky while it is shown." << std::endl;
+    return false;
+  }
+  return true;
+}
+
+//----------------------------------------------------------------------------
+int TestPickIsFast()
+{
+  // A large, pickable surface standing in for a segmentation closed surface. It is drawn
+  // through a vtkPolyDataMapper, as poly data models are.
+  vtkNew<vtkSphereSource> sphere;
+  sphere->SetThetaResolution(900);
+  sphere->SetPhiResolution(900);
+  sphere->Update();
+
+  vtkNew<vtkPolyDataMapper> surfaceMapper;
+  // SetInputData (not a pipeline connection) so the mapper's input is available for locator
+  // building without a render/update.
+  surfaceMapper->SetInputData(sphere->GetOutput());
+  vtkNew<vtkActor> surfaceActor;
+  surfaceActor->SetMapper(surfaceMapper);
+
+  vtkNew<vtkRenderer> surfaceRenderer;
+  surfaceRenderer->AddActor(surfaceActor);
+  vtkNew<vtkRenderWindow> surfaceWindow;
+  surfaceWindow->SetOffScreenRendering(1);
+  surfaceWindow->SetSize(300, 300);
+  surfaceWindow->AddRenderer(surfaceRenderer);
+
+  if (!PicksAreFastFor(surfaceRenderer, "poly data surface", sphere->GetOutput()->GetNumberOfCells()))
+  {
+    return EXIT_FAILURE;
+  }
+
+  // A large volumetric mesh, as a CFD or FE result is. Slicer draws an unstructured grid
+  // model through a vtkDataSetMapper rather than a vtkPolyDataMapper, so a picker that only
+  // indexes vtkPolyDataMapper leaves this case on the unindexed linear scan - which is what
+  // this half of the test is here to catch.
+  vtkNew<vtkImageData> image;
+  image->SetDimensions(101, 101, 101);
+  image->AllocateScalars(VTK_UNSIGNED_CHAR, 1);
+  vtkNew<vtkAppendFilter> toUnstructuredGrid;
+  toUnstructuredGrid->SetInputData(image);
+  toUnstructuredGrid->Update();
+  vtkUnstructuredGrid* grid = toUnstructuredGrid->GetOutput();
+
+  vtkNew<vtkDataSetMapper> gridMapper;
+  gridMapper->SetInputData(grid);
+  vtkNew<vtkActor> gridActor;
+  gridActor->SetMapper(gridMapper);
+
+  vtkNew<vtkRenderer> gridRenderer;
+  gridRenderer->AddActor(gridActor);
+  vtkNew<vtkRenderWindow> gridWindow;
+  gridWindow->SetOffScreenRendering(1);
+  gridWindow->SetSize(300, 300);
+  gridWindow->AddRenderer(gridRenderer);
+
+  if (!PicksAreFastFor(gridRenderer, "unstructured grid", grid->GetNumberOfCells()))
+  {
     return EXIT_FAILURE;
   }
 
@@ -378,6 +607,10 @@ int vtkMRMLAccuratePickerTest(int vtkNotUsed(argc), char* vtkNotUsed(argv)[])
     return EXIT_FAILURE;
   }
   if (TestPickLinesAndVerticesInFrontOfSurface(false) != EXIT_SUCCESS)
+  {
+    return EXIT_FAILURE;
+  }
+  if (TestPickRayCastMapper() != EXIT_SUCCESS)
   {
     return EXIT_FAILURE;
   }

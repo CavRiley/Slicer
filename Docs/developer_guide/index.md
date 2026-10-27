@@ -5,10 +5,12 @@
 
 api
 mrml_overview
+displayable_managers_overview
 module_overview
 parameter_nodes/index
 modules/index
 extensions
+layer_dm/index
 python_environment
 python_faq
 script_repository
@@ -16,6 +18,7 @@ build_instructions/index
 debugging/index
 contributing
 style_guide
+rons_rules_for_tools
 advanced_topics
 authors
 ```

@@ -49,8 +49,9 @@ public:
   void WriteXML(ostream& of, int indent) override;
 
   /// Copy node content (excludes basic data, such as name and node references).
+  /// Voxel value quantity and units are copied, too.
   /// \sa vtkMRMLNode::CopyContent
-  vtkMRMLCopyContentDefaultMacro(vtkMRMLScalarVolumeNode);
+  vtkMRMLCopyContentMacro(vtkMRMLScalarVolumeNode);
 
   ///
   /// Get node XML tag name (like Volume, Model)
@@ -83,6 +84,15 @@ public:
   /// with nomenclature in the DICOM standard.
   void SetVoxelValueUnits(vtkCodedEntry*);
   vtkGetObjectMacro(VoxelValueUnits, vtkCodedEntry);
+
+  /// Short text that describes the voxel value quantity in files (for example "velocity").
+  /// It is the code meaning of the quantity (or the code value if the meaning is not specified),
+  /// empty if quantity is not specified. It is stored in the "labels" field of the pixel axis in NRRD files.
+  static std::string GetVoxelValueQuantityLabel(vtkCodedEntry* quantity);
+
+  /// Set voxel value quantity from a text label that was read from a file (for example "velocity").
+  /// The label is used as both code value and code meaning, without a coding scheme designator.
+  void SetVoxelValueQuantityFromLabel(const std::string& label);
 
 protected:
   vtkMRMLScalarVolumeNode();
