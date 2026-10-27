@@ -440,10 +440,28 @@ class DataReviewLogic(ScriptedLoadableModuleLogic):
 
     # ---- Scene handling --------------------------------------------------------------------------
 
+    @staticmethod
+    def removeNodeWithDependents(node):
+        """Remove a displayable node together with its display and storage nodes.
+
+        Removing only the data node leaves its display and storage nodes (and their pipelines) in the
+        scene, which leaked about 100 MB per case switch.
+        """
+        scene = slicer.mrmlScene
+        if node is None or not scene.IsNodePresent(node):
+            return
+        dependents = [node.GetNthDisplayNode(i) for i in range(node.GetNumberOfDisplayNodes())]
+        dependents += [node.GetNthStorageNode(i) for i in range(node.GetNumberOfStorageNodes())]
+        # Remove the data node first: while a volume is still shown in a slice view, removing its display
+        # node makes the slice logic create a fresh default display node, which would then be orphaned.
+        scene.RemoveNode(node)
+        for dependent in dependents:
+            if dependent is not None and scene.IsNodePresent(dependent):
+                scene.RemoveNode(dependent)
+
     def unloadCurrentCase(self):
         for node in list(self.imageNodes.values()) + [self.segmentationNode]:
-            if node is not None and slicer.mrmlScene.IsNodePresent(node):
-                slicer.mrmlScene.RemoveNode(node)
+            self.removeNodeWithDependents(node)
         self.imageNodes = {}
         self.segmentationNode = None
 
@@ -1167,6 +1185,15 @@ class DataReviewTest(ScriptedLoadableModuleTest):
 
         self.assertEqual(len(slicer.util.getNodesByClass("vtkMRMLScalarVolumeNode")), 2, "previous case should be removed")
         self.assertEqual(len(slicer.util.getNodesByClass("vtkMRMLSegmentationNode")), 1)
+        self.delayDisplay("Display and storage nodes of the previous case are removed too")
+        nodeCount = slicer.mrmlScene.GetNumberOfNodes()
+        for i in range(5):
+            logic.loadCase(i % 3)
+        self.assertEqual(slicer.mrmlScene.GetNumberOfNodes(), nodeCount, "scene must not accumulate nodes across cases")
+        self.assertEqual(len(slicer.util.getNodesByClass("vtkMRMLScalarVolumeDisplayNode")), 2)
+        self.assertEqual(len(slicer.util.getNodesByClass("vtkMRMLVolumeArchetypeStorageNode")), 2)
+        self.assertEqual(len(slicer.util.getNodesByClass("vtkMRMLSegmentationDisplayNode")), 1)
+        self.assertEqual(len(slicer.util.getNodesByClass("vtkMRMLSegmentationStorageNode")), 1)
 
         self.delayDisplay("Recording decisions")
         logic.setDecision(0, STATUS_ACCEPTED, reviewer="tester")
