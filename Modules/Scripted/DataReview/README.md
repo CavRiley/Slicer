@@ -48,6 +48,28 @@ Slicer if none is found, `-FullUI`, `-SkipSetup`, `-Reset`, `-Dest`, `-Slicer 'C
 Slicer's own messages go to its log file rather than the console on Windows; the script reports the
 outcome from Slicer's exit code.
 
+### From a clone of the repository
+
+If the machine already has a clone of the repository (for example a development checkout), there is
+no need for a second copy. Either point the bootstrap script at it, which uses the clone as it is
+(no pull, no sparse checkout):
+
+```
+bash /path/to/Slicer/Modules/Scripted/DataReview/Scripts/install_review_station.sh --dest /path/to/Slicer \
+  --manifest /path/to/dataset/review_manifest.json --reviewer "JD"
+```
+
+or run the setup script directly from the clone, which is all the bootstrap script does after fetching:
+
+```
+/Applications/Slicer.app/Contents/MacOS/Slicer --python-script /path/to/Slicer/Modules/Scripted/DataReview/Scripts/setup_review_station.py \
+  --manifest /path/to/dataset/review_manifest.json --reviewer "JD"
+```
+
+The module is then loaded from the clone, so `git pull` on the `data-review-module` branch updates it.
+On Windows use `-Dest C:\path\to\Slicer` with the PowerShell script, or run `Slicer.exe --python-script ...`
+the same way.
+
 ### Step by step
 
 1. **Copy** the `DataReview` folder and the dataset folder onto the machine.

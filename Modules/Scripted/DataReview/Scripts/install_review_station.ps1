@@ -19,7 +19,8 @@
 .PARAMETER Reviewer
   Reviewer name stored with each decision.
 .PARAMETER Dest
-  Where to keep the module checkout (default: %USERPROFILE%\DataReview).
+  Where to keep the module checkout (default: %USERPROFILE%\DataReview). An existing full clone of the
+  repository is used as it is (no pull, no sparse checkout).
 .PARAMETER Slicer
   Path to Slicer.exe (default: auto-detect).
 .PARAMETER InstallSlicer
@@ -64,10 +65,17 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 # --- 1. Fetch or update the module folder ---------------------------------------------------------
 Write-Host "==> Module checkout: $Dest"
 if (Test-Path -LiteralPath (Join-Path $Dest ".git")) {
-  & git -C $Dest sparse-checkout set $ModuleSubdir
-  & git -C $Dest pull --ff-only -q
-  if ($LASTEXITCODE -ne 0) { Write-Error "git pull failed"; exit 1 }
-  Write-Host "    updated to $(& git -C $Dest rev-parse --short HEAD)"
+  $sparse = & git -C $Dest config --get core.sparseCheckout 2>$null
+  if ($sparse -eq "true") {
+    & git -C $Dest sparse-checkout set $ModuleSubdir
+    & git -C $Dest pull --ff-only -q
+    if ($LASTEXITCODE -ne 0) { Write-Error "git pull failed"; exit 1 }
+    Write-Host "    updated to $(& git -C $Dest rev-parse --short HEAD)"
+  } else {
+    # A full clone of the repository (e.g. a development checkout): use it as it is, never pull or
+    # convert it to a sparse checkout.
+    Write-Host "    using existing clone as is ($(& git -C $Dest rev-parse --short HEAD), branch $(& git -C $Dest rev-parse --abbrev-ref HEAD))"
+  }
 } else {
   $parent = Split-Path -Parent $Dest
   if ($parent -and -not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent | Out-Null }

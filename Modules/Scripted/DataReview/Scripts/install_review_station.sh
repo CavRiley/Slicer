@@ -9,6 +9,8 @@
 #     | bash -s -- --manifest /path/to/dataset/review_manifest.json --reviewer "JD"
 #
 # Re-running the script updates the module (git pull) and re-applies the settings.
+# From an existing full clone of the repository, pass it with --dest; it is used as is (no pull, no sparse checkout):
+#   bash Modules/Scripted/DataReview/Scripts/install_review_station.sh --dest /path/to/Slicer --manifest ...
 set -euo pipefail
 
 REPO_URL="https://github.com/CavRiley/Slicer.git"
@@ -29,7 +31,8 @@ Usage: install_review_station.sh --manifest PATH [options]
 
   --manifest PATH     review_manifest.json to open automatically at startup (required unless --skip-setup/--reset)
   --reviewer NAME     reviewer name stored with each decision
-  --dest DIR          where to keep the module checkout (default: $DEST)
+  --dest DIR          where to keep the module checkout (default: $DEST); an existing full clone of the
+                      repository is used as is
   --repo URL          git repository (default: $REPO_URL)
   --branch NAME       git branch (default: $BRANCH)
   --slicer PATH       Slicer executable (default: auto-detect)
@@ -70,10 +73,16 @@ command -v git >/dev/null || { echo "ERROR: git is required (macOS: run 'xcode-s
 
 # --- 1. Fetch or update the module folder ---------------------------------------------------------
 echo "==> Module checkout: $DEST"
-if [[ -d "$DEST/.git" ]]; then
-  git -C "$DEST" sparse-checkout set "$MODULE_SUBDIR"
-  git -C "$DEST" pull --ff-only -q
-  echo "    updated to $(git -C "$DEST" rev-parse --short HEAD)"
+if [[ -d "$DEST/.git" ]] || git -C "$DEST" rev-parse --show-toplevel >/dev/null 2>&1; then
+  if [[ "$(git -C "$DEST" config --get core.sparseCheckout || true)" == "true" ]]; then
+    git -C "$DEST" sparse-checkout set "$MODULE_SUBDIR"
+    git -C "$DEST" pull --ff-only -q
+    echo "    updated to $(git -C "$DEST" rev-parse --short HEAD)"
+  else
+    # A full clone of the repository (e.g. a development checkout): use it as it is, never pull or
+    # convert it to a sparse checkout.
+    echo "    using existing clone as is ($(git -C "$DEST" rev-parse --short HEAD), branch $(git -C "$DEST" rev-parse --abbrev-ref HEAD))"
+  fi
 else
   mkdir -p "$(dirname "$DEST")"
   git clone -q --depth 1 --filter=blob:none --sparse -b "$BRANCH" "$REPO_URL" "$DEST"
