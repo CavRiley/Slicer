@@ -29,8 +29,19 @@ This fetches only the module folder from the repository into `~/DataReview` (a s
 to download the latest stable Slicer into `/Applications` if none is installed, `--full-ui` to keep
 Slicer's menus and toolbars, `--reset` to undo the setup, and `--dest DIR` to keep the checkout
 elsewhere. Running it again later updates the module with `git pull`. Run `bash install_review_station.sh --help`
-for all options. If the dataset has no manifest yet, run the script with `--skip-setup`, create the manifest
-in Slicer (step 2 below), then run the script again with `--manifest`.
+for all options.
+
+If the dataset has **no manifest yet** but follows the default layout (`adc/`, `tracew/`, `labels/`, see
+*Expected data layout*), pass the folder instead and the manifest is created for you:
+
+```
+  | bash -s -- --dataset /path/to/dataset --reviewer "JD"
+```
+
+`--adc-pattern`, `--tracew-pattern` and `--seg-pattern` adjust the layout (for example
+`--adc-pattern '**/*_adc.nii.gz'`). Decisions already in an existing `review_manifest.json` are kept.
+The same options exist on `setup_review_station.py` and, as `-Dataset`, `-AdcPattern`, `-TracewPattern`,
+`-SegPattern`, on the Windows script.
 
 ### Quick way (Windows)
 

@@ -11,11 +11,17 @@
 
     powershell -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/CavRiley/Slicer/data-review-module/Modules/Scripted/DataReview/Scripts/install_review_station.ps1))) -Manifest 'D:\dataset\review_manifest.json' -Reviewer 'JD'"
 
+  or, when the dataset has no manifest yet (default layout adc\, tracew\, labels\): ... -Dataset 'D:\dataset' -Reviewer 'JD'
+
   Re-running the script updates the module (git pull) and re-applies the settings.
   Requires git (https://git-scm.com/download/win).
 
 .PARAMETER Manifest
-  review_manifest.json to open automatically at startup (required unless -SkipSetup or -Reset).
+  review_manifest.json to open automatically at startup.
+.PARAMETER Dataset
+  Dataset folder without a manifest yet: scan it (adc\, tracew\, labels\ by default) and create
+  review_manifest.json in it. -AdcPattern, -TracewPattern and -SegPattern override the layout.
+  One of -Manifest / -Dataset is required unless -SkipSetup or -Reset.
 .PARAMETER Reviewer
   Reviewer name stored with each decision.
 .PARAMETER Dest
@@ -35,6 +41,10 @@
 [CmdletBinding()]
 param(
   [string]$Manifest = "",
+  [string]$Dataset = "",
+  [string]$AdcPattern = "",
+  [string]$TracewPattern = "",
+  [string]$SegPattern = "",
   [string]$Reviewer = "",
   [string]$Dest = (Join-Path $env:USERPROFILE "DataReview"),
   [string]$Repo = "https://github.com/CavRiley/Slicer.git",
@@ -49,8 +59,12 @@ param(
 $ErrorActionPreference = "Stop"
 $ModuleSubdir = "Modules/Scripted/DataReview"
 
-if (-not $Manifest -and -not $SkipSetup -and -not $Reset) {
-  Write-Error "-Manifest is required (or use -SkipSetup / -Reset)"
+if (-not $Manifest -and -not $Dataset -and -not $SkipSetup -and -not $Reset) {
+  Write-Error "-Manifest or -Dataset is required (or use -SkipSetup / -Reset)"
+  exit 2
+}
+if ($Dataset -and -not (Test-Path -LiteralPath $Dataset -PathType Container)) {
+  Write-Error "dataset folder not found: $Dataset"
   exit 2
 }
 if ($Manifest -and -not (Test-Path -LiteralPath $Manifest -PathType Leaf)) {
@@ -138,7 +152,11 @@ $setupArgs = @("--no-splash", "--no-main-window", "--python-script", "`"$Setup`"
 if ($Reset) {
   $setupArgs += "--reset"
 } else {
-  $setupArgs += @("--manifest", "`"$Manifest`"")
+  if ($Manifest) { $setupArgs += @("--manifest", "`"$Manifest`"") }
+  if ($Dataset) { $setupArgs += @("--dataset", "`"$Dataset`"") }
+  if ($AdcPattern) { $setupArgs += @("--adc-pattern", "`"$AdcPattern`"") }
+  if ($TracewPattern) { $setupArgs += @("--tracew-pattern", "`"$TracewPattern`"") }
+  if ($SegPattern) { $setupArgs += @("--seg-pattern", "`"$SegPattern`"") }
   if ($Reviewer) { $setupArgs += @("--reviewer", "`"$Reviewer`"") }
   if ($FullUI) { $setupArgs += "--full-ui" }
 }

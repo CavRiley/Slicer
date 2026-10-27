@@ -3,6 +3,14 @@
     Slicer --python-script /path/to/DataReview/Scripts/setup_review_station.py \
         --manifest /data/stroke/review_manifest.json --reviewer "JD"
 
+or, when the dataset has no manifest yet but follows the default layout (adc/, tracew/, labels/):
+
+    Slicer --python-script /path/to/DataReview/Scripts/setup_review_station.py \
+        --dataset /data/stroke --reviewer "JD"
+
+which scans the folder, writes /data/stroke/review_manifest.json (keeping any decisions already in it),
+and then configures Slicer to open it. --adc-pattern, --tracew-pattern and --seg-pattern override the layout.
+
 What it does (all stored in Slicer's own settings for this user):
   * registers the DataReview folder as an additional module path,
   * makes Data Review the module that opens at startup,
@@ -21,9 +29,45 @@ import qt
 import slicer
 
 
+def createManifest(moduleDir, datasetDir, adcPattern, tracewPattern, segPattern):
+    """Scan a dataset folder with the module's own logic and write review_manifest.json into it."""
+    import json
+    datasetDir = os.path.abspath(datasetDir)
+    if not os.path.isdir(datasetDir):
+        print(f"ERROR: dataset folder not found: {datasetDir}")
+        return None
+    if moduleDir not in sys.path:
+        sys.path.insert(0, moduleDir)
+    import DataReview
+    manifestPath = os.path.join(datasetDir, "review_manifest.json")
+    try:
+        manifest = DataReview.DataReviewLogic.scanDirectory(
+            datasetDir, {"ADC": adcPattern, "TRACEW": tracewPattern}, segPattern or None)
+    except Exception as e:
+        print(f"ERROR: could not create the manifest: {e}")
+        return None
+    previous = None
+    if os.path.isfile(manifestPath):
+        with open(manifestPath, encoding="utf-8") as f:
+            previous = json.load(f)
+        manifest = DataReview.DataReviewLogic.mergeReviewState(manifest, previous)
+    logic = DataReview.DataReviewLogic()
+    logic.setManifest(manifest, manifestPath)
+    logic.save()
+    counts = logic.summary()
+    missing = sum(1 for c in logic.cases if not c.get("segmentation"))
+    print(f"Manifest {'updated' if previous else 'created'}: {manifestPath}")
+    print(f"  {counts['total']} cases ({counts['reviewed']} already reviewed), {missing} without segmentation")
+    return manifestPath
+
+
 def main():
     parser = argparse.ArgumentParser(description="Configure this machine as a Data Review station")
     parser.add_argument("--manifest", help="review_manifest.json to open automatically at startup")
+    parser.add_argument("--dataset", help="dataset folder: scan it and create review_manifest.json in it (alternative to --manifest)")
+    parser.add_argument("--adc-pattern", default="adc/*.nii.gz", help="glob for ADC images, relative to the dataset folder")
+    parser.add_argument("--tracew-pattern", default="tracew/*.nii.gz", help="glob for TRACEW images, relative to the dataset folder")
+    parser.add_argument("--seg-pattern", default="labels/*.nii.gz", help="glob for lesion segmentations, relative to the dataset folder")
     parser.add_argument("--reviewer", default=None, help="reviewer name stored with each decision")
     parser.add_argument("--full-ui", action="store_true", help="keep the regular Slicer interface (menus, toolbars)")
     parser.add_argument("--reset", action="store_true", help="remove all Data Review startup settings")
@@ -51,8 +95,13 @@ def main():
         slicer.util.exit(0)
         return
 
+    if args.dataset and not args.manifest:
+        args.manifest = createManifest(moduleDir, args.dataset, args.adc_pattern, args.tracew_pattern, args.seg_pattern)
+        if not args.manifest:
+            slicer.util.exit(1)
+            return
     if not args.manifest:
-        parser.error("--manifest is required (or use --reset)")
+        parser.error("--manifest or --dataset is required (or use --reset)")
     manifestPath = os.path.abspath(args.manifest)
     if not os.path.isfile(manifestPath):
         print(f"ERROR: manifest not found: {manifestPath}")

@@ -7,6 +7,8 @@
 # One-liner on a fresh machine (the manifest must already exist, see README "Create the manifest"):
 #   curl -fsSL https://raw.githubusercontent.com/CavRiley/Slicer/data-review-module/Modules/Scripted/DataReview/Scripts/install_review_station.sh \
 #     | bash -s -- --manifest /path/to/dataset/review_manifest.json --reviewer "JD"
+# or, when the dataset has no manifest yet (default layout adc/, tracew/, labels/):
+#     | bash -s -- --dataset /path/to/dataset --reviewer "JD"
 #
 # Re-running the script updates the module (git pull) and re-applies the settings.
 # From an existing full clone of the repository, pass it with --dest; it is used as is (no pull, no sparse checkout):
@@ -18,6 +20,8 @@ BRANCH="data-review-module"
 MODULE_SUBDIR="Modules/Scripted/DataReview"
 DEST="$HOME/DataReview"
 MANIFEST=""
+DATASET=""
+PATTERN_ARGS=()
 REVIEWER=""
 SLICER_EXE=""
 FULL_UI=""
@@ -29,7 +33,10 @@ usage() {
   cat <<EOF
 Usage: install_review_station.sh --manifest PATH [options]
 
-  --manifest PATH     review_manifest.json to open automatically at startup (required unless --skip-setup/--reset)
+  --manifest PATH     review_manifest.json to open automatically at startup
+  --dataset DIR       dataset folder without a manifest yet: scan it (adc/, tracew/, labels/ by default) and
+                      create review_manifest.json in it; --adc-pattern, --tracew-pattern, --seg-pattern override
+                      the layout (one of --manifest / --dataset is required unless --skip-setup/--reset)
   --reviewer NAME     reviewer name stored with each decision
   --dest DIR          where to keep the module checkout (default: $DEST); an existing full clone of the
                       repository is used as is
@@ -47,6 +54,8 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --manifest) MANIFEST="$2"; shift 2 ;;
+    --dataset) DATASET="$2"; shift 2 ;;
+    --adc-pattern|--tracew-pattern|--seg-pattern) PATTERN_ARGS+=("$1" "$2"); shift 2 ;;
     --reviewer) REVIEWER="$2"; shift 2 ;;
     --dest) DEST="$2"; shift 2 ;;
     --repo) REPO_URL="$2"; shift 2 ;;
@@ -61,12 +70,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$MANIFEST" && -z "$SKIP_SETUP" && -z "$RESET" ]]; then
-  echo "ERROR: --manifest is required (or use --skip-setup / --reset)" >&2
+if [[ -z "$MANIFEST" && -z "$DATASET" && -z "$SKIP_SETUP" && -z "$RESET" ]]; then
+  echo "ERROR: --manifest or --dataset is required (or use --skip-setup / --reset)" >&2
   exit 2
 fi
 if [[ -n "$MANIFEST" && ! -f "$MANIFEST" ]]; then
   echo "ERROR: manifest not found: $MANIFEST" >&2
+  exit 2
+fi
+if [[ -n "$DATASET" && ! -d "$DATASET" ]]; then
+  echo "ERROR: dataset folder not found: $DATASET" >&2
   exit 2
 fi
 command -v git >/dev/null || { echo "ERROR: git is required (macOS: run 'xcode-select --install')" >&2; exit 2; }
@@ -144,7 +157,9 @@ args=()
 if [[ -n "$RESET" ]]; then
   args+=(--reset)
 else
-  args+=(--manifest "$MANIFEST")
+  [[ -n "$MANIFEST" ]] && args+=(--manifest "$MANIFEST")
+  # ${arr[@]+"${arr[@]}"} keeps bash 3.2 (macOS) from aborting on an empty array under set -u
+  [[ -n "$DATASET" ]] && args+=(--dataset "$DATASET" ${PATTERN_ARGS[@]+"${PATTERN_ARGS[@]}"})
   [[ -n "$REVIEWER" ]] && args+=(--reviewer "$REVIEWER")
   [[ -n "$FULL_UI" ]] && args+=(--full-ui)
 fi
